@@ -25,6 +25,12 @@ from src.models.memory import (
     ContextSnapshot,
     ConversationThread,
 )
+from src.models.analytics import (
+    ClinicianDashboardSnapshot,
+    PatientReport,
+    AnalyticsEvent,
+    AssessmentProgress,
+)
 from src.config import get_settings
 
 # this is the Alembic Config object

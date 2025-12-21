@@ -15,6 +15,12 @@ from src.models.memory import (
     ContextSnapshot,
     ConversationThread,
 )
+from src.models.analytics import (
+    ClinicianDashboardSnapshot,
+    PatientReport,
+    AnalyticsEvent,
+    AssessmentProgress,
+)
 
 __all__ = [
     "Base",
@@ -33,4 +39,8 @@ __all__ = [
     "MemorySummary",
     "ContextSnapshot",
     "ConversationThread",
+    "ClinicianDashboardSnapshot",
+    "PatientReport",
+    "AnalyticsEvent",
+    "AssessmentProgress",
 ]
