@@ -99,12 +99,20 @@ Alternative voices:
 
 ### 7. Call Settings
 
-| Setting | Value |
-|---------|-------|
-| Silence Timeout (seconds) | `30` |
-| Max Duration (seconds) | `1800` (30 minutes) |
-| Background Sound | `off` |
-| End Call on Goodbye | `true` |
+| Setting | Value | Notes |
+|---------|-------|-------|
+| Silence Timeout (seconds) | `3-4` | **Important**: Increase if agent interrupts mid-sentence |
+| Response Delay (ms) | `800-1000` | Adds natural pause before responding |
+| Max Duration (seconds) | `1800` (30 minutes) | Adjust per session type |
+| Background Sound | `off` | |
+| End Call on Goodbye | `true` | |
+| Interruption Threshold | `0.8` | Higher = harder to interrupt (0-1) |
+
+**Fixing interruption issues:**
+If the agent interrupts while you're speaking:
+1. Increase `Silence Timeout` to 3-4 seconds
+2. Increase `Interruption Threshold` to 0.8+
+3. Enable `Background Denoising` if available
 
 ### 8. Server URL (Webhook)
 
@@ -112,6 +120,12 @@ Alternative voices:
 |---------|-------|
 | Server URL | `https://your-domain.com/api/v1/vapi/webhook` |
 | Server URL Secret | (optional, for webhook verification) |
+
+**Current Development Setup:**
+```
+Ngrok URL: https://sustentacular-giada-chunkily.ngrok-free.dev
+Webhook:   https://sustentacular-giada-chunkily.ngrok-free.dev/api/v1/vapi/webhook
+```
 
 For local development with ngrok:
 ```bash
