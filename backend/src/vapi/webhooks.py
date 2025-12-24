@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from src.database import get_db
 from src.services.session_service import SessionService
 from src.memory.context import ContextService
+from src.assessment.processing import SessionProcessor
 from src.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -106,7 +107,7 @@ async def handle_vapi_webhook(
                 return await handle_hang(session_service, payload)
 
             case "end-of-call-report":
-                return await handle_end_of_call_report(session_service, payload)
+                return await handle_end_of_call_report(session_service, payload, db)
 
             case "function-call":
                 return await handle_function_call(session_service, payload)
@@ -202,8 +203,8 @@ async def handle_hang(service: SessionService, payload: dict) -> dict:
     return {"status": "ok"}
 
 
-async def handle_end_of_call_report(service: SessionService, payload: dict) -> dict:
-    """Handle end-of-call report with summary and duration."""
+async def handle_end_of_call_report(service: SessionService, payload: dict, db: AsyncSession) -> dict:
+    """Handle end-of-call report with summary and duration, then trigger analysis."""
     call_data = payload.get("call", {})
     call_id = call_data.get("id")
 
@@ -216,12 +217,30 @@ async def handle_end_of_call_report(service: SessionService, payload: dict) -> d
     recording_url = call_data.get("recordingUrl")
 
     # Update session with report data
-    await service.update_session_from_report(
+    session = await service.update_session_from_report(
         vapi_call_id=call_id,
         duration_seconds=duration_seconds,
         summary=summary,
         recording_url=recording_url,
     )
+
+    # Trigger post-session analysis pipeline
+    if session:
+        try:
+            processor = SessionProcessor(db)
+            result = await processor.process_session(session.id)
+            logger.info(
+                f"Session {session.id} analysis complete: "
+                f"{result.signals_extracted} signals, {result.domains_scored} domains, "
+                f"{result.processing_time_ms}ms"
+            )
+            return {
+                "status": "ok",
+                "analysis": result.to_dict()
+            }
+        except Exception as e:
+            logger.error(f"Session analysis failed for {session.id}: {e}")
+            return {"status": "ok", "analysis_error": str(e)}
 
     return {"status": "ok"}
 
