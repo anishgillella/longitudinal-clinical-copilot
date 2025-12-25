@@ -47,6 +47,7 @@ import {
 import { VoiceVisualizer } from '@/components/voice/voice-visualizer';
 import { TranscriptPanel } from '@/components/voice/transcript-panel';
 import { useVapi } from '@/hooks/use-vapi';
+import { ClinicalAnalyticsDashboard, SignalDetailModal } from '@/components/analytics';
 
 interface Message {
   id: string;
@@ -122,12 +123,13 @@ interface PreSessionCheckIn {
 
 type SessionPhase = 'setup' | 'checkin' | 'active' | 'processing' | 'review';
 
-// Mock patients for selection - in production, fetch from API
-const patients = [
-  { id: '1', name: 'Alex Thompson', age: 12, lastSession: '2024-12-16' },
-  { id: '2', name: 'Jordan Martinez', age: 10, lastSession: '2024-12-10' },
-  { id: '3', name: 'Sam Wilson', age: 13, lastSession: null },
-];
+// Patient interface for type safety
+interface Patient {
+  id: string;
+  name: string;
+  age: number;
+  lastSession: string | null;
+}
 
 // Domain display names
 const domainNames: Record<string, string> = {
@@ -154,7 +156,8 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 export default function VoiceSessionPage() {
   const [phase, setPhase] = useState<SessionPhase>('setup');
-  const [selectedPatient, setSelectedPatient] = useState<typeof patients[0] | null>(null);
+  const [patients, setPatients] = useState<Patient[]>([]);
+  const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [sessionType, setSessionType] = useState<'intake' | 'checkin' | 'targeted_probe'>('checkin');
   const [messages, setMessages] = useState<Message[]>([]);
   const [isMuted, setIsMuted] = useState(false);
@@ -166,6 +169,11 @@ export default function VoiceSessionPage() {
   const [verifiedSignals, setVerifiedSignals] = useState<Set<string>>(new Set());
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [patientsLoading, setPatientsLoading] = useState(true);
+
+  // Signal detail modal state
+  const [selectedSignal, setSelectedSignal] = useState<Signal | null>(null);
+  const [isSignalModalOpen, setIsSignalModalOpen] = useState(false);
 
   // Pre-session check-in state
   const [checkIn, setCheckIn] = useState<PreSessionCheckIn>({
@@ -173,6 +181,81 @@ export default function VoiceSessionPage() {
     notableEvents: '',
     focusArea: 'general',
   });
+
+  // Fetch patients from API on mount
+  useEffect(() => {
+    const fetchPatients = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/v1/patients`);
+        if (response.ok) {
+          const data = await response.json();
+          // Transform API response to Patient interface
+          const transformedPatients: Patient[] = data.map((p: {
+            id: string;
+            first_name: string;
+            last_name: string;
+            date_of_birth: string;
+          }) => {
+            const birthDate = new Date(p.date_of_birth);
+            const age = Math.floor((Date.now() - birthDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000));
+            return {
+              id: p.id,
+              name: `${p.first_name} ${p.last_name}`,
+              age,
+              lastSession: null, // TODO: fetch from sessions API
+            };
+          });
+          setPatients(transformedPatients);
+
+          // If no patients exist, create a test patient
+          if (transformedPatients.length === 0) {
+            await createTestPatient();
+          }
+        } else {
+          console.error('Failed to fetch patients:', response.status);
+          // Create test patient if API fails
+          await createTestPatient();
+        }
+      } catch (err) {
+        console.error('Error fetching patients:', err);
+        // Create test patient on error
+        await createTestPatient();
+      } finally {
+        setPatientsLoading(false);
+      }
+    };
+
+    const createTestPatient = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/v1/patients`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            first_name: 'Alex',
+            last_name: 'Thompson',
+            date_of_birth: '2011-06-15', // Makes them ~13 years old
+            gender: 'male',
+            primary_concern: 'Social communication difficulties',
+            status: 'active',
+          }),
+        });
+
+        if (response.ok) {
+          const newPatient = await response.json();
+          setPatients([{
+            id: newPatient.id,
+            name: `${newPatient.first_name} ${newPatient.last_name}`,
+            age: 13,
+            lastSession: null,
+          }]);
+        }
+      } catch (err) {
+        console.error('Failed to create test patient:', err);
+      }
+    };
+
+    fetchPatients();
+  }, []);
 
   const handleTranscript = useCallback(
     (role: 'assistant' | 'user', text: string, isFinal: boolean) => {
@@ -382,7 +465,7 @@ export default function VoiceSessionPage() {
     setPhase('review');
   };
 
-  const { isCallActive, isSpeaking, volumeLevel, startCall, endCall, toggleMute } =
+  const { isCallActive, isSpeaking, volumeLevel, startCall, endCall, toggleMute, callId } =
     useVapi({
       onTranscript: handleTranscript,
       onCallStart: handleCallStart,
@@ -399,6 +482,9 @@ export default function VoiceSessionPage() {
     setError(null);
     setIsLoading(true);
 
+    // Determine interview mode based on patient age
+    const interviewMode: 'teen' | 'parent' | 'adult' = selectedPatient.age >= 18 ? 'adult' : selectedPatient.age >= 13 ? 'teen' : 'parent';
+
     try {
       // Create session in backend
       const response = await fetch(`${API_BASE_URL}/api/v1/sessions`, {
@@ -409,6 +495,8 @@ export default function VoiceSessionPage() {
         body: JSON.stringify({
           patient_id: selectedPatient.id,
           session_type: sessionType,
+          interview_mode: interviewMode,
+          vapi_assistant_id: process.env.NEXT_PUBLIC_VAPI_ASSISTANT_ID,
           pre_session_notes: JSON.stringify(checkIn),
         }),
       });
@@ -422,7 +510,65 @@ export default function VoiceSessionPage() {
     }
 
     try {
-      await startCall();
+      // Build VAPI template variables
+      // Get focus area label for display
+      const focusAreaLabel = focusAreas.find(f => f.value === checkIn.focusArea)?.label || checkIn.focusArea;
+
+      const vapiVariables = {
+        // Interviewee context
+        interviewee_type: interviewMode,
+        interviewee_is_parent: interviewMode === 'parent',
+        interviewee_is_teen: interviewMode === 'teen',
+        interviewee_is_adult: interviewMode === 'adult',
+
+        // Patient information
+        patient_name: selectedPatient.name.split(' ')[0], // First name
+        patient_full_name: selectedPatient.name,
+        patient_age: selectedPatient.age,
+
+        // Session context
+        session_type: sessionType,
+        is_first_session: !selectedPatient.lastSession,
+        focus_area: checkIn.focusArea,
+
+        // These match the VAPI prompt template variables
+        focus_areas: focusAreaLabel,
+        previous_session_summary: selectedPatient.lastSession
+          ? `Last session was on ${selectedPatient.lastSession}. ${checkIn.notableEvents ? `Notable events since then: ${checkIn.notableEvents}` : ''}`
+          : 'This is the first session.',
+        missing_information: 'Explore all domains - social communication, restricted interests, sensory sensitivities, developmental history.',
+
+        // Behavioral adaptations
+        use_concrete_language: interviewMode === 'teen',
+        use_parent_perspective: interviewMode === 'parent',
+      };
+
+      console.log('Starting VAPI call with variables:', vapiVariables);
+
+      const vapiCallId = await startCall({
+        variables: vapiVariables,
+      });
+
+      // Link the VAPI call ID to the session
+      if (sessionId && vapiCallId) {
+        try {
+          console.log('Linking VAPI call ID to session:', { sessionId, vapiCallId });
+          const linkResponse = await fetch(`${API_BASE_URL}/api/v1/sessions/${sessionId}/link/${vapiCallId}`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+          });
+
+          if (linkResponse.ok) {
+            console.log('Successfully linked VAPI call ID to session');
+          } else {
+            console.error('Failed to link VAPI call ID to session:', linkResponse.status);
+          }
+        } catch (linkErr) {
+          console.error('Error linking VAPI call ID to session:', linkErr);
+        }
+      }
     } catch (err) {
       console.error('Failed to start call:', err);
       setError('Failed to start voice session. Please check your microphone permissions.');
@@ -571,17 +717,26 @@ export default function VoiceSessionPage() {
                       <Button
                         variant="outline"
                         className="w-full justify-between gap-2"
+                        disabled={patientsLoading}
                       >
                         <div className="flex items-center gap-2">
                           <User className="h-4 w-4" />
-                          {selectedPatient
-                            ? `${selectedPatient.name} (${selectedPatient.age} yrs)`
-                            : 'Select Patient'}
+                          {patientsLoading
+                            ? 'Loading patients...'
+                            : selectedPatient
+                              ? `${selectedPatient.name} (${selectedPatient.age} yrs)`
+                              : patients.length === 0
+                                ? 'No patients - creating...'
+                                : 'Select Patient'}
                         </div>
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent className="w-full min-w-[300px]">
-                      {patients.map((patient) => (
+                      {patients.length === 0 ? (
+                        <DropdownMenuItem disabled>
+                          <span className="text-neutral-500">No patients available</span>
+                        </DropdownMenuItem>
+                      ) : patients.map((patient) => (
                         <DropdownMenuItem
                           key={patient.id}
                           onClick={() => setSelectedPatient(patient)}
@@ -968,7 +1123,7 @@ export default function VoiceSessionPage() {
             </motion.div>
           )}
 
-          {/* Review Phase */}
+          {/* Review Phase - Apple-inspired Clinical Analytics Dashboard */}
           {phase === 'review' && analysisResult && (
             <motion.div
               key="review"
@@ -977,179 +1132,151 @@ export default function VoiceSessionPage() {
               exit={{ opacity: 0 }}
               className="flex flex-1 flex-col overflow-auto"
             >
-              {/* Header */}
+              {/* Minimal Header */}
               <div className="mb-6 flex items-center justify-between">
-                <div className="flex items-center gap-4">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setPhase('setup')}
+                  className="gap-2"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  New Session
+                </Button>
+                <div className="flex items-center gap-3">
                   <Button
-                    variant="ghost"
+                    variant="outline"
                     size="sm"
-                    onClick={() => setPhase('setup')}
                     className="gap-2"
+                    onClick={() => {
+                      // Export functionality
+                      const data = JSON.stringify(analysisResult, null, 2);
+                      const blob = new Blob([data], { type: 'application/json' });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = `session-${sessionId}-analysis.json`;
+                      a.click();
+                    }}
                   >
-                    <ArrowLeft className="h-4 w-4" />
-                    Back
+                    <FileText className="h-4 w-4" />
+                    Export
                   </Button>
+                  <Button
+                    onClick={handleSaveAndComplete}
+                    className="gap-2 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 shadow-lg shadow-green-500/25"
+                    disabled={isLoading}
+                  >
+                    {isLoading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <CheckCircle2 className="h-4 w-4" />
+                    )}
+                    Complete Review
+                  </Button>
+                </div>
+              </div>
+
+              {/* Beautiful Analytics Dashboard */}
+              <ClinicalAnalyticsDashboard
+                data={{
+                  signals: analysisResult.signals.map(s => ({
+                    id: s.id,
+                    signal_name: s.signal_name,
+                    signal_type: s.signal_type,
+                    evidence: s.evidence,
+                    reasoning: s.reasoning,
+                    dsm5_criteria: (s as { dsm5_criteria?: string }).dsm5_criteria,
+                    maps_to_domain: s.maps_to_domain,
+                    clinical_significance: s.clinical_significance as 'low' | 'moderate' | 'high',
+                    confidence: s.confidence,
+                    verbatim_quote: (s as { verbatim_quote?: string }).verbatim_quote,
+                  })),
+                  domainScores: analysisResult.domain_scores.map(d => ({
+                    domain_code: d.domain_code,
+                    domain_name: d.domain_name || domainNames[d.domain_code] || d.domain_code,
+                    score: d.normalized_score,
+                    confidence: d.confidence,
+                    evidence_count: d.evidence_count,
+                  })),
+                  hypotheses: analysisResult.hypotheses.map(h => ({
+                    condition_code: h.condition_code,
+                    condition_name: h.condition_name,
+                    evidence_strength: h.evidence_strength,
+                    uncertainty: h.uncertainty,
+                    supporting_count: analysisResult.signals.length, // Approximate
+                    explanation: h.explanation,
+                  })),
+                  dsm5Coverage: analysisResult.signals.reduce((acc, s) => {
+                    const criterion = (s as { dsm5_criteria?: string }).dsm5_criteria;
+                    if (criterion) {
+                      acc[criterion] = (acc[criterion] || 0) + 1;
+                    }
+                    return acc;
+                  }, {} as Record<string, number>),
+                  dsm5Gaps: ['A1', 'A2', 'A3', 'B1', 'B2', 'B3', 'B4'].filter(c => {
+                    const criterion = c;
+                    return !analysisResult.signals.some(s =>
+                      (s as { dsm5_criteria?: string }).dsm5_criteria === criterion
+                    );
+                  }),
+                  summary: analysisResult.summary?.brief_summary || undefined,
+                }}
+                patientName={selectedPatient?.name || 'Patient'}
+                sessionType={sessionTypeLabels[sessionType]}
+                onSignalClick={(signal) => {
+                  setSelectedSignal(analysisResult.signals.find(s => s.id === signal.id) || null);
+                  setIsSignalModalOpen(true);
+                }}
+              />
+
+              {/* Clinician Notes Section */}
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.3 }}
+                className="mt-6 rounded-3xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 p-6"
+              >
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-purple-500 to-pink-500">
+                    <MessageSquare className="h-5 w-5 text-white" />
+                  </div>
                   <div>
-                    <h2 className="text-xl font-semibold text-neutral-900 dark:text-white">
-                      Session Review: {selectedPatient?.name}
-                    </h2>
-                    <p className="text-sm text-neutral-500">
-                      {sessionTypeLabels[sessionType]} • {formatDuration(callDuration)}
-                    </p>
+                    <h3 className="font-semibold text-neutral-900 dark:text-white">Clinician Notes</h3>
+                    <p className="text-sm text-neutral-500">Add your observations and clinical impressions</p>
                   </div>
                 </div>
-                <Button
-                  onClick={handleSaveAndComplete}
-                  className="gap-2 bg-green-600 hover:bg-green-700"
-                  disabled={isLoading}
-                >
-                  {isLoading ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <CheckCircle2 className="h-4 w-4" />
-                  )}
-                  Save & Complete
-                </Button>
-              </div>
-
-              <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-                {/* Extracted Signals */}
-                <Card className="border-neutral-200 bg-white p-6 dark:border-neutral-800 dark:bg-neutral-900">
-                  <div className="mb-4 flex items-center justify-between">
-                    <h3 className="flex items-center gap-2 font-semibold">
-                      <Brain className="h-5 w-5 text-purple-500" />
-                      Extracted Signals
-                    </h3>
-                    <Badge variant="secondary">{analysisResult.signals.length} signals</Badge>
-                  </div>
-
-                  <div className="space-y-4 max-h-[400px] overflow-y-auto">
-                    {analysisResult.signals.map((signal) => (
-                      <div
-                        key={signal.id}
-                        className="rounded-lg border border-neutral-200 p-4 dark:border-neutral-700"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="flex items-start gap-3">
-                            <Checkbox
-                              id={`signal-${signal.id}`}
-                              checked={verifiedSignals.has(signal.id)}
-                              onCheckedChange={(checked) => handleVerifySignal(signal.id, !!checked)}
-                            />
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2 mb-1">
-                                <span className="font-medium">{signal.signal_name}</span>
-                                <Badge variant="outline" className="text-xs">
-                                  {signal.maps_to_domain}
-                                </Badge>
-                                {getSignificanceBadge(signal.clinical_significance)}
-                              </div>
-                              <p className="text-sm text-neutral-600 dark:text-neutral-400 italic mb-2">
-                                "{signal.evidence}"
-                              </p>
-                              <p className="text-xs text-neutral-500">{signal.reasoning}</p>
-                              <div className="mt-2 flex items-center gap-4 text-xs text-neutral-500">
-                                <span>Intensity: {Math.round(signal.intensity * 100)}%</span>
-                                <span>Confidence: {Math.round(signal.confidence * 100)}%</span>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </Card>
-
-                {/* Domain Scores */}
-                <Card className="border-neutral-200 bg-white p-6 dark:border-neutral-800 dark:bg-neutral-900">
-                  <div className="mb-4 flex items-center gap-2">
-                    <BarChart3 className="h-5 w-5 text-blue-500" />
-                    <h3 className="font-semibold">Domain Scores</h3>
-                  </div>
-
-                  <div className="space-y-4">
-                    {analysisResult.domain_scores.map((domain) => (
-                      <div key={domain.domain_code}>
-                        <div className="flex items-center justify-between mb-1">
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium">{domain.domain_code}</span>
-                            <span className="text-sm text-neutral-500">{domainNames[domain.domain_code] || domain.domain_name}</span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium">{Math.round(domain.raw_score * 100)}%</span>
-                            {domain.score_change !== null && (
-                              <span className={`text-xs ${domain.score_change > 0 ? 'text-red-500' : 'text-green-500'}`}>
-                                {domain.score_change > 0 ? '+' : ''}{Math.round(domain.score_change * 100)}%
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <div className="h-2 w-full rounded-full bg-neutral-100 dark:bg-neutral-800">
-                          <div
-                            className={`h-2 rounded-full ${getScoreColor(domain.raw_score)}`}
-                            style={{ width: `${domain.raw_score * 100}%` }}
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Hypotheses */}
-                  <div className="mt-6 pt-6 border-t border-neutral-200 dark:border-neutral-700">
-                    <h4 className="font-medium mb-3">Diagnostic Hypotheses</h4>
-                    <div className="space-y-3">
-                      {analysisResult.hypotheses.map((h) => (
-                        <div key={h.id} className="flex items-center justify-between">
-                          <div>
-                            <span className="font-medium">{h.condition_name}</span>
-                            <p className="text-xs text-neutral-500">{h.explanation.slice(0, 80)}...</p>
-                          </div>
-                          <div className="text-right">
-                            <span className="text-lg font-semibold">{Math.round(h.evidence_strength * 100)}%</span>
-                            <p className="text-xs text-neutral-500">confidence</p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </Card>
-
-                {/* Summary */}
-                <Card className="border-neutral-200 bg-white p-6 dark:border-neutral-800 dark:bg-neutral-900 lg:col-span-2">
-                  <div className="mb-4 flex items-center gap-2">
-                    <FileText className="h-5 w-5 text-green-500" />
-                    <h3 className="font-semibold">AI Summary</h3>
-                  </div>
-
-                  <p className="text-neutral-700 dark:text-neutral-300 mb-4">
-                    {analysisResult.summary?.brief_summary}
-                  </p>
-
-                  {analysisResult.summary?.follow_up_suggestions && (
-                    <div className="mb-4">
-                      <h4 className="font-medium mb-2">Recommended Follow-up</h4>
-                      <ul className="list-disc list-inside text-sm text-neutral-600 dark:text-neutral-400 space-y-1">
-                        {analysisResult.summary.follow_up_suggestions.suggestions.map((s, i) => (
-                          <li key={i}>{s}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-
-                  {/* Clinician Notes */}
-                  <div className="mt-4 pt-4 border-t border-neutral-200 dark:border-neutral-700">
-                    <h4 className="font-medium mb-2">Clinician Notes</h4>
-                    <Textarea
-                      placeholder="Add your observations and notes..."
-                      value={clinicianNotes}
-                      onChange={(e) => setClinicianNotes(e.target.value)}
-                      className="min-h-[100px]"
-                    />
-                  </div>
-                </Card>
-              </div>
+                <Textarea
+                  placeholder="Document your clinical observations, impressions, and any additional context that would be valuable for the patient record..."
+                  value={clinicianNotes}
+                  onChange={(e) => setClinicianNotes(e.target.value)}
+                  className="min-h-[120px] rounded-xl border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800 focus:bg-white dark:focus:bg-neutral-900 transition-colors resize-none"
+                />
+              </motion.div>
             </motion.div>
           )}
+
+          {/* Signal Detail Modal */}
+          <SignalDetailModal
+            signal={selectedSignal ? {
+              id: selectedSignal.id,
+              signal_name: selectedSignal.signal_name,
+              signal_type: selectedSignal.signal_type,
+              evidence: selectedSignal.evidence,
+              reasoning: selectedSignal.reasoning,
+              dsm5_criteria: (selectedSignal as { dsm5_criteria?: string }).dsm5_criteria,
+              maps_to_domain: selectedSignal.maps_to_domain,
+              clinical_significance: selectedSignal.clinical_significance as 'low' | 'moderate' | 'high',
+              confidence: selectedSignal.confidence,
+              verbatim_quote: (selectedSignal as { verbatim_quote?: string }).verbatim_quote,
+            } : null}
+            isOpen={isSignalModalOpen}
+            onClose={() => setIsSignalModalOpen(false)}
+            onVerify={(signalId) => {
+              handleVerifySignal(signalId, true);
+              setIsSignalModalOpen(false);
+            }}
+          />
         </AnimatePresence>
       </div>
 

@@ -45,6 +45,7 @@ export function useVapi(options: UseVapiOptions = {}) {
       setIsCallActive(true);
       setIsConnected(true);
       setError(null);
+      // Note: call ID is available from the start() return value, not this event
       options.onCallStart?.();
     });
 
@@ -102,24 +103,59 @@ export function useVapi(options: UseVapiOptions = {}) {
     };
   }, []);
 
-  const startCall = useCallback(async (assistantId?: string) => {
+  interface StartCallOptions {
+    assistantId?: string;
+    variables?: Record<string, string | number | boolean>;
+  }
+
+  // Store the current call ID
+  const [callId, setCallId] = useState<string | null>(null);
+
+  const startCall = useCallback(async (options?: StartCallOptions | string): Promise<string | null> => {
     if (!vapiRef.current) {
       throw new Error('VAPI not initialized');
     }
 
-    const id = assistantId || process.env.NEXT_PUBLIC_VAPI_ASSISTANT_ID;
-    if (!id) {
+    // Handle both old string API and new options API
+    const assistantId = typeof options === 'string'
+      ? options
+      : options?.assistantId || process.env.NEXT_PUBLIC_VAPI_ASSISTANT_ID;
+
+    const variables = typeof options === 'object' ? options.variables : undefined;
+
+    if (!assistantId) {
       throw new Error('Assistant ID not configured. Add NEXT_PUBLIC_VAPI_ASSISTANT_ID to .env.local');
     }
 
-    console.log('Starting VAPI call with assistant:', id);
+    console.log('Starting VAPI call with assistant:', assistantId);
+    if (variables) {
+      console.log('With variables:', variables);
+    }
 
     try {
       // Request microphone permission first
       await navigator.mediaDevices.getUserMedia({ audio: true });
       console.log('Microphone permission granted');
 
-      await vapiRef.current.start(id);
+      // If we have variables, pass them as assistant overrides
+      // VAPI expects variableValues in the assistantOverrides object
+      let call;
+      if (variables) {
+        call = await vapiRef.current.start(assistantId, {
+          variableValues: variables,
+        } as never);
+      } else {
+        call = await vapiRef.current.start(assistantId);
+      }
+
+      // Extract call ID from the response
+      const vapiCallId = (call as { id?: string })?.id || null;
+      if (vapiCallId) {
+        console.log('VAPI call started with ID:', vapiCallId);
+        setCallId(vapiCallId);
+      }
+
+      return vapiCallId;
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to start call';
       console.error('Failed to start call:', errorMessage, err);
@@ -146,6 +182,7 @@ export function useVapi(options: UseVapiOptions = {}) {
     isSpeaking,
     volumeLevel,
     error,
+    callId,
     startCall,
     endCall,
     toggleMute,

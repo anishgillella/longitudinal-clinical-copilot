@@ -60,8 +60,26 @@ class ClinicalSignal(Base, TimestampMixin):
 
     # Clinical mapping
     maps_to_domain: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    dsm5_criteria: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # DSM-5 criteria codes: A1, A2, A3, B1, B2, B3, B4 for autism
     clinical_significance: Mapped[str] = mapped_column(String(20), default="moderate")
     # Significance: low, moderate, high
+
+    # Quote-level evidence
+    verbatim_quote: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Exact patient words when available
+    quote_context: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Surrounding context for the quote
+
+    # Clinician verification
+    clinician_verified: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    clinician_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    verified_by: Mapped[Optional[UUID]] = mapped_column(
+        ForeignKey("clinicians.id", ondelete="SET NULL"), nullable=True
+    )
+    verified_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # Metadata
     extracted_at: Mapped[datetime] = mapped_column(
@@ -91,7 +109,10 @@ class ClinicalSignal(Base, TimestampMixin):
             "intensity": self.intensity,
             "confidence": self.confidence,
             "maps_to_domain": self.maps_to_domain,
+            "dsm5_criteria": self.dsm5_criteria,
             "clinical_significance": self.clinical_significance,
+            "verbatim_quote": self.verbatim_quote,
+            "quote_context": self.quote_context,
             "extracted_at": self.extracted_at.isoformat() if self.extracted_at else None,
         }
 

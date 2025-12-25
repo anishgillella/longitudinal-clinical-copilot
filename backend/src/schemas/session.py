@@ -18,12 +18,20 @@ class SessionStatus(str, Enum):
     FAILED = "failed"
 
 
+class InterviewMode(str, Enum):
+    """Who is being interviewed in the session."""
+    PARENT = "parent"
+    TEEN = "teen"
+    ADULT = "adult"
+
+
 # Request schemas
 class SessionCreate(BaseModel):
     """Create a new voice session."""
     patient_id: UUID
     session_type: SessionType
     vapi_assistant_id: str
+    interview_mode: InterviewMode = InterviewMode.PARENT
     scheduled_at: Optional[datetime] = None
 
 
@@ -53,6 +61,7 @@ class SessionResponse(BaseModel):
     vapi_call_id: Optional[str]
     vapi_assistant_id: str
     session_type: str
+    interview_mode: Optional[str]
     status: str
     scheduled_at: Optional[datetime]
     started_at: Optional[datetime]

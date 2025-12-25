@@ -31,6 +31,7 @@ class VoiceSession(Base, TimestampMixin):
 
     # Session metadata
     session_type: Mapped[str] = mapped_column(String(50), nullable=False)  # intake, checkin, targeted_probe
+    interview_mode: Mapped[str] = mapped_column(String(20), default="parent")  # parent, teen, adult
     status: Mapped[str] = mapped_column(String(20), default="pending")  # pending, active, completed, failed
 
     # Timing

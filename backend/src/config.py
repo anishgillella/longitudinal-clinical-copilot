@@ -34,8 +34,9 @@ class Settings(BaseSettings):
 
     # VAPI (Phase 2)
     vapi_api_key: str = ""
+    vapi_private_api_key: str = ""  # Private key for API calls (updating assistant, etc.)
     vapi_phone_number_id: str = ""
-    vapi_assistant_id: str = ""  # Default assistant ID
+    vapi_assistant_id: str = "fdfb1cc6-ba4d-4a3e-a938-f6e3963a8bb9"  # Default assistant ID
     vapi_webhook_secret: str = ""  # Optional webhook verification
 
     # OpenRouter (Phase 3)

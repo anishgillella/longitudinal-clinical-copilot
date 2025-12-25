@@ -26,6 +26,7 @@ class SessionService:
             clinician_id=clinician_id,
             vapi_assistant_id=data.vapi_assistant_id,
             session_type=data.session_type.value,
+            interview_mode=data.interview_mode.value,
             status="pending",
             scheduled_at=data.scheduled_at,
         )
