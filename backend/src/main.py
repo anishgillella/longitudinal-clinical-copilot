@@ -8,6 +8,7 @@ from src.database import init_db
 from src.api.router import api_router
 from src.api.health import router as health_router
 from src.vapi.client import sync_vapi_webhook_on_startup
+from src.llm.openrouter import close_shared_client
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -28,6 +29,7 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown
     logger.info("Shutting down application...")
+    await close_shared_client()  # Clean up HTTP connection pool
 
 
 settings = get_settings()

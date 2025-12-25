@@ -5,6 +5,8 @@ Provides access to various LLMs through OpenRouter's unified API.
 Default model: google/gemini-2.5-flash
 
 Supports Pydantic model validation for structured outputs.
+
+Optimized with connection pooling for faster parallel requests.
 """
 
 import httpx
@@ -21,9 +23,37 @@ logger = logging.getLogger(__name__)
 # Type variable for generic Pydantic model support
 T = TypeVar('T', bound=BaseModel)
 
+# Shared HTTP client for connection pooling across all instances
+# This dramatically improves performance for parallel LLM calls
+_shared_client: Optional[httpx.AsyncClient] = None
+
+
+async def get_shared_client() -> httpx.AsyncClient:
+    """Get or create the shared HTTP client with connection pooling."""
+    global _shared_client
+    if _shared_client is None or _shared_client.is_closed:
+        _shared_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(120.0, connect=10.0),
+            limits=httpx.Limits(
+                max_keepalive_connections=10,
+                max_connections=20,
+                keepalive_expiry=30.0,
+            ),
+            http2=True,  # HTTP/2 for multiplexing
+        )
+    return _shared_client
+
+
+async def close_shared_client():
+    """Close the shared client (call on app shutdown)."""
+    global _shared_client
+    if _shared_client is not None and not _shared_client.is_closed:
+        await _shared_client.aclose()
+        _shared_client = None
+
 
 class OpenRouterClient:
-    """Client for OpenRouter API."""
+    """Client for OpenRouter API with connection pooling."""
 
     BASE_URL = "https://openrouter.ai/api/v1"
 
@@ -68,14 +98,15 @@ class OpenRouterClient:
         if response_format:
             payload["response_format"] = response_format
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(
-                f"{self.BASE_URL}/chat/completions",
-                headers=self.headers,
-                json=payload,
-            )
-            response.raise_for_status()
-            return response.json()
+        # Use shared client for connection pooling
+        client = await get_shared_client()
+        response = await client.post(
+            f"{self.BASE_URL}/chat/completions",
+            headers=self.headers,
+            json=payload,
+        )
+        response.raise_for_status()
+        return response.json()
 
     async def complete_text(
         self,
@@ -160,26 +191,27 @@ class OpenRouterClient:
             "stream": True,
         }
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            async with client.stream(
-                "POST",
-                f"{self.BASE_URL}/chat/completions",
-                headers=self.headers,
-                json=payload,
-            ) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if line.startswith("data: "):
-                        data = line[6:]
-                        if data == "[DONE]":
-                            break
-                        try:
-                            chunk = json.loads(data)
-                            delta = chunk.get("choices", [{}])[0].get("delta", {})
-                            if "content" in delta:
-                                yield delta["content"]
-                        except json.JSONDecodeError:
-                            continue
+        # Use shared client for connection pooling
+        client = await get_shared_client()
+        async with client.stream(
+            "POST",
+            f"{self.BASE_URL}/chat/completions",
+            headers=self.headers,
+            json=payload,
+        ) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    data = line[6:]
+                    if data == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                        delta = chunk.get("choices", [{}])[0].get("delta", {})
+                        if "content" in delta:
+                            yield delta["content"]
+                    except json.JSONDecodeError:
+                        continue
 
     async def analyze_transcript(
         self,
@@ -386,12 +418,12 @@ class OpenRouterClient:
     async def health_check(self) -> bool:
         """Check if OpenRouter API is accessible."""
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(
-                    f"{self.BASE_URL}/models",
-                    headers=self.headers,
-                )
-                return response.status_code == 200
+            client = await get_shared_client()
+            response = await client.get(
+                f"{self.BASE_URL}/models",
+                headers=self.headers,
+            )
+            return response.status_code == 200
         except Exception as e:
             logger.error(f"OpenRouter health check failed: {e}")
             return False

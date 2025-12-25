@@ -2,18 +2,21 @@
 Post-Session Processing Pipeline
 
 Orchestrates the full processing of a completed voice session:
-1. Extract clinical signals from transcript
-2. Score assessment domains
-3. Update diagnostic hypotheses
-4. Generate session summary
-5. Check for clinical concerns
+1. Extract clinical signals from transcript (parallel with 4, 5)
+2. Score assessment domains (depends on 1)
+3. Update diagnostic hypotheses (depends on 1, 2)
+4. Generate session summary (parallel with 1, 5)
+5. Check for clinical concerns (parallel with 1, 4)
+
+Optimized for parallel execution where possible to reduce total processing time.
 """
 
+import asyncio
 import logging
 import time
 from uuid import UUID
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Tuple, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -111,73 +114,123 @@ class SessionProcessor:
             result.errors.append("No transcript found")
             return result
 
-        # Step 1: Extract signals
+        # ============================================================
+        # PHASE 1: Run independent tasks in parallel
+        # - Signal extraction (needed for phase 2)
+        # - Concern detection (independent)
+        # ============================================================
         signals = []
+        concerns = None
+
+        phase1_tasks = []
+        task_names = []
+
         if extract_signals:
-            try:
-                signals = await self.extraction_service.extract_signals(
-                    session_id=session_id,
-                    transcript=transcript,
-                    session_type=session.session_type,
-                )
-                result.signals_extracted = len(signals)
-            except Exception as e:
-                logger.error(f"Signal extraction failed: {e}")
-                result.errors.append(f"Signal extraction: {str(e)}")
+            phase1_tasks.append(
+                self._extract_signals_safe(session_id, transcript, session.session_type)
+            )
+            task_names.append("signals")
 
-        # Step 2: Score domains
-        if score_domains and signals:
-            try:
-                scores = await self.scoring_service.score_domains(
-                    session_id=session_id,
-                    patient_id=session.patient_id,
-                    signals=signals,
-                )
-                result.domains_scored = len(scores)
-            except Exception as e:
-                logger.error(f"Domain scoring failed: {e}")
-                result.errors.append(f"Domain scoring: {str(e)}")
-
-        # Step 3: Update hypotheses
-        if update_hypotheses:
-            try:
-                await self.hypothesis_engine.generate_hypotheses(
-                    patient_id=session.patient_id,
-                    session_id=session_id,
-                )
-                result.hypotheses_updated = True
-            except Exception as e:
-                logger.error(f"Hypothesis generation failed: {e}")
-                result.errors.append(f"Hypothesis generation: {str(e)}")
-
-        # Step 4: Generate summary
-        if generate_summary:
-            try:
-                await self._generate_and_store_summary(
-                    session=session,
-                    transcript=transcript,
-                    signals=signals,
-                )
-                result.summary_generated = True
-            except Exception as e:
-                logger.error(f"Summary generation failed: {e}")
-                result.errors.append(f"Summary generation: {str(e)}")
-
-        # Step 5: Check concerns
         if check_concerns:
-            try:
-                concerns = await self.extraction_service.detect_concerns(
+            phase1_tasks.append(
+                self._detect_concerns_safe(session_id, transcript)
+            )
+            task_names.append("concerns")
+
+        if phase1_tasks:
+            logger.info(f"Phase 1: Running {len(phase1_tasks)} tasks in parallel: {task_names}")
+            phase1_results = await asyncio.gather(*phase1_tasks, return_exceptions=True)
+
+            # Process phase 1 results
+            result_idx = 0
+            if extract_signals:
+                signals_result = phase1_results[result_idx]
+                result_idx += 1
+                if isinstance(signals_result, Exception):
+                    logger.error(f"Signal extraction failed: {signals_result}")
+                    result.errors.append(f"Signal extraction: {str(signals_result)}")
+                else:
+                    signals = signals_result or []
+                    result.signals_extracted = len(signals)
+
+            if check_concerns:
+                concerns_result = phase1_results[result_idx]
+                if isinstance(concerns_result, Exception):
+                    logger.error(f"Concern detection failed: {concerns_result}")
+                    result.errors.append(f"Concern detection: {str(concerns_result)}")
+                else:
+                    concerns = concerns_result
+
+        # ============================================================
+        # PHASE 2: Run dependent tasks sequentially, but summary in parallel
+        # - Domain scoring (needs signals from phase 1)
+        # - Hypothesis generation (needs signals + domain scores)
+        # - Summary generation (can run in parallel, uses signals if available)
+        # ============================================================
+        phase2_tasks = []
+        phase2_task_names = []
+
+        # Summary can run in parallel with scoring/hypothesis since it only
+        # optionally uses signals (which we now have)
+        if generate_summary:
+            phase2_tasks.append(
+                self._generate_summary_safe(session, transcript, signals)
+            )
+            phase2_task_names.append("summary")
+
+        # Sequential chain: scoring -> hypothesis (run as a single coroutine)
+        if score_domains or update_hypotheses:
+            phase2_tasks.append(
+                self._scoring_and_hypothesis_chain(
                     session_id=session_id,
-                    transcript=transcript,
+                    patient_id=session.patient_id,
+                    signals=signals,
+                    score_domains=score_domains,
+                    update_hypotheses=update_hypotheses,
                 )
+            )
+            phase2_task_names.append("scoring_chain")
+
+        if phase2_tasks:
+            logger.info(f"Phase 2: Running {len(phase2_tasks)} tasks in parallel: {phase2_task_names}")
+            phase2_results = await asyncio.gather(*phase2_tasks, return_exceptions=True)
+
+            # Process phase 2 results
+            result_idx = 0
+            if generate_summary:
+                summary_result = phase2_results[result_idx]
+                result_idx += 1
+                if isinstance(summary_result, Exception):
+                    logger.error(f"Summary generation failed: {summary_result}")
+                    result.errors.append(f"Summary generation: {str(summary_result)}")
+                else:
+                    result.summary_generated = True
+
+            if score_domains or update_hypotheses:
+                chain_result = phase2_results[result_idx]
+                if isinstance(chain_result, Exception):
+                    logger.error(f"Scoring/hypothesis chain failed: {chain_result}")
+                    result.errors.append(f"Scoring/hypothesis: {str(chain_result)}")
+                else:
+                    domains_scored, hypotheses_updated = chain_result
+                    result.domains_scored = domains_scored
+                    result.hypotheses_updated = hypotheses_updated
+
+        # ============================================================
+        # PHASE 3: Update summary with concerns (needs both summary and concerns)
+        # ============================================================
+        if concerns and result.summary_generated:
+            try:
                 concern_list = concerns.get("concerns", [])
                 result.concerns_flagged = len(concern_list)
-
-                # Update session summary with concerns
                 await self._update_summary_with_concerns(session_id, concerns)
             except Exception as e:
-                logger.error(f"Concern detection failed: {e}")
-                result.errors.append(f"Concern detection: {str(e)}")
+                logger.error(f"Updating summary with concerns failed: {e}")
+                result.errors.append(f"Concern update: {str(e)}")
+        elif concerns:
+            # Still count concerns even if summary wasn't generated
+            concern_list = concerns.get("concerns", [])
+            result.concerns_flagged = len(concern_list)
 
         # Calculate processing time
         result.processing_time_ms = int((time.time() - start_time) * 1000)
@@ -194,6 +247,86 @@ class SessionProcessor:
         )
 
         return result
+
+    # ================================================================
+    # Helper methods for parallel execution
+    # ================================================================
+
+    async def _extract_signals_safe(
+        self,
+        session_id: UUID,
+        transcript: str,
+        session_type: str,
+    ) -> list:
+        """Extract signals with error handling for parallel execution."""
+        return await self.extraction_service.extract_signals(
+            session_id=session_id,
+            transcript=transcript,
+            session_type=session_type,
+        )
+
+    async def _detect_concerns_safe(
+        self,
+        session_id: UUID,
+        transcript: str,
+    ) -> dict:
+        """Detect concerns with error handling for parallel execution."""
+        return await self.extraction_service.detect_concerns(
+            session_id=session_id,
+            transcript=transcript,
+        )
+
+    async def _generate_summary_safe(
+        self,
+        session: VoiceSession,
+        transcript: str,
+        signals: list,
+    ) -> SessionSummary:
+        """Generate summary with error handling for parallel execution."""
+        return await self._generate_and_store_summary(
+            session=session,
+            transcript=transcript,
+            signals=signals,
+        )
+
+    async def _scoring_and_hypothesis_chain(
+        self,
+        session_id: UUID,
+        patient_id: UUID,
+        signals: list,
+        score_domains: bool,
+        update_hypotheses: bool,
+    ) -> Tuple[int, bool]:
+        """
+        Run domain scoring and hypothesis generation sequentially.
+
+        These must be sequential because hypothesis generation depends on
+        domain scores being written to the database first.
+
+        Returns:
+            Tuple of (domains_scored_count, hypotheses_updated_bool)
+        """
+        domains_scored = 0
+        hypotheses_updated = False
+
+        # Step 1: Score domains (if enabled and we have signals)
+        if score_domains and signals:
+            scores = await self.scoring_service.score_domains(
+                session_id=session_id,
+                patient_id=patient_id,
+                signals=signals,
+            )
+            domains_scored = len(scores)
+
+        # Step 2: Generate hypotheses (depends on domain scores in DB)
+        if update_hypotheses:
+            await self.hypothesis_engine.generate_hypotheses(
+                patient_id=patient_id,
+                session_id=session_id,
+            )
+            hypotheses_updated = True
+
+        return domains_scored, hypotheses_updated
 
     async def _get_transcript_text(self, session_id: UUID) -> Optional[str]:
         """Get transcript as formatted text."""

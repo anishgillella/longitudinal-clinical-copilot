@@ -668,19 +668,21 @@ export default function VoiceSessionPage() {
   const handleSaveAndComplete = async () => {
     setIsLoading(true);
 
-    // Save clinician notes and verified signals
-    if (sessionId) {
+    // Save clinician notes and verified signals using batch endpoint
+    if (sessionId && verifiedSignals.size > 0) {
       try {
-        // Save each verified signal
-        for (const signalId of verifiedSignals) {
-          await fetch(`${API_BASE_URL}/api/v1/sessions/${sessionId}/signals/${signalId}/verify`, {
-            method: 'PATCH',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ verified: true, clinician_notes: clinicianNotes }),
-          });
-        }
+        // Use batch verification endpoint for much better performance
+        await fetch(`${API_BASE_URL}/api/v1/sessions/${sessionId}/signals/verify-batch`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            signal_ids: Array.from(verifiedSignals),
+            verified: true,
+            clinician_notes: clinicianNotes,
+          }),
+        });
       } catch (err) {
         console.error('Failed to save:', err);
       }

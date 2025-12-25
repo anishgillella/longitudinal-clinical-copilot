@@ -469,3 +469,61 @@ async def verify_signal(
         "verified": signal.clinician_verified,
         "notes": signal.clinician_notes,
     }
+
+
+@router.post("/{session_id}/signals/verify-batch")
+async def verify_signals_batch(
+    session_id: UUID,
+    signal_ids: list[UUID],
+    verified: bool = True,
+    clinician_notes: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    clinician: Clinician = Depends(get_current_clinician),
+):
+    """
+    Batch verify multiple signals at once.
+
+    Much faster than verifying signals one by one.
+    """
+    session_service = SessionService(db)
+    session = await session_service.get_session(session_id)
+
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found",
+        )
+    if session.clinician_id != clinician.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to access this session",
+        )
+
+    from src.models.assessment import ClinicalSignal
+    from sqlalchemy import select
+
+    # Fetch all signals in one query
+    result = await db.execute(
+        select(ClinicalSignal).where(
+            ClinicalSignal.id.in_(signal_ids),
+            ClinicalSignal.session_id == session_id,
+        )
+    )
+    signals = list(result.scalars().all())
+
+    # Update all signals
+    now = datetime.utcnow()
+    updated_ids = []
+    for signal in signals:
+        signal.clinician_verified = verified
+        signal.clinician_notes = clinician_notes
+        signal.verified_by = clinician.id
+        signal.verified_at = now if verified else None
+        updated_ids.append(str(signal.id))
+
+    await db.commit()
+
+    return {
+        "verified_count": len(updated_ids),
+        "signal_ids": updated_ids,
+    }
