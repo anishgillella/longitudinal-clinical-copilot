@@ -16,7 +16,7 @@ Server URL (ngrok for dev):
 https://sustentacular-giada-chunkily.ngrok-free.dev/api/v1/vapi/webhook
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 import logging
@@ -61,16 +61,22 @@ class EndSessionRequest(BaseModel):
     session_id: Optional[str] = None
 
 
-def parse_timestamp(ts: Optional[str]) -> Optional[datetime]:
-    """Parse ISO timestamp from VAPI."""
-    if not ts:
+def parse_timestamp(ts) -> Optional[datetime]:
+    """Parse timestamp from VAPI - handles both ISO strings and millisecond integers."""
+    if ts is None:
         return None
     try:
-        # Handle various ISO formats
-        if ts.endswith("Z"):
-            ts = ts[:-1] + "+00:00"
-        return datetime.fromisoformat(ts)
-    except ValueError:
+        # Handle integer timestamps (milliseconds since epoch)
+        if isinstance(ts, (int, float)):
+            # Use timezone-aware UTC datetime
+            return datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
+        # Handle ISO string formats
+        if isinstance(ts, str):
+            if ts.endswith("Z"):
+                ts = ts[:-1] + "+00:00"
+            return datetime.fromisoformat(ts)
+        return None
+    except (ValueError, OSError):
         return None
 
 
@@ -87,20 +93,26 @@ async def handle_vapi_webhook(
     We handle the ones relevant for our use case.
     """
     payload = await request.json()
-    event_type = payload.get("type", "")
-    call_data = payload.get("call", {})
-    call_id = call_data.get("id")
 
-    logger.info(f"VAPI webhook received: {event_type} for call {call_id}")
+    # VAPI wraps data in "message" for server-url webhooks
+    message = payload.get("message", payload)
+    event_type = message.get("type", "")
+    call_data = message.get("call", {})
+    call_id = call_data.get("id") if call_data else None
+
+    # Only log important events, skip noisy ones
+    if event_type in ("status-update", "end-of-call-report", "function-call"):
+        logger.info(f"VAPI webhook: type={event_type}, call_id={call_id}")
 
     session_service = SessionService(db)
 
     try:
         match event_type:
             case "status-update":
-                return await handle_status_update(session_service, payload)
+                return await handle_status_update(session_service, payload, db)
 
             case "transcript":
+                # Silently store transcript without logging each segment
                 return await handle_transcript(session_service, payload)
 
             case "hang":
@@ -117,11 +129,15 @@ async def handle_vapi_webhook(
                 return {"assistant": None}
 
             case "speech-update":
-                # Real-time speech detection - could be used for live features
+                # Real-time speech detection - silently acknowledge
                 return {"status": "ok"}
 
+            case "conversation-update":
+                # Store conversation updates (contains full conversation history)
+                return await handle_conversation_update(session_service, payload)
+
             case _:
-                logger.warning(f"Unhandled VAPI event type: {event_type}")
+                logger.debug(f"Unhandled VAPI event type: {event_type}")
                 return {"status": "ignored", "event": event_type}
 
     except Exception as e:
@@ -129,26 +145,53 @@ async def handle_vapi_webhook(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def handle_status_update(service: SessionService, payload: dict) -> dict:
+async def handle_status_update(service: SessionService, payload: dict, db: AsyncSession) -> dict:
     """Handle call status update events."""
-    call_data = payload.get("call", {})
+    # Extract from message wrapper (VAPI wraps server-url webhook data)
+    message = payload.get("message", payload)
+    call_data = message.get("call", {})
     call_id = call_data.get("id")
-    status = payload.get("status")
+    status = message.get("status")
+    ended_reason = message.get("endedReason")
 
     if not call_id:
         return {"status": "ignored", "reason": "no call id"}
 
-    timestamp = parse_timestamp(payload.get("timestamp"))
+    timestamp = parse_timestamp(message.get("timestamp"))
 
     if status == "in-progress":
         # Call started
         await service.mark_session_started(
             vapi_call_id=call_id,
-            started_at=timestamp or datetime.utcnow(),
+            started_at=timestamp or datetime.now(timezone.utc),
         )
     elif status == "ended":
-        # Call ended - this is also sent with hang event
-        pass
+        # Call ended - mark session as completed
+        completion_reason = _map_ended_reason(ended_reason or "unknown")
+
+        session = await service.mark_session_ended(
+            vapi_call_id=call_id,
+            ended_at=timestamp or datetime.now(timezone.utc),
+            completion_reason=completion_reason,
+        )
+
+        # Trigger analysis if session exists and hasn't been processed yet
+        # This is a fallback in case end-of-call-report doesn't arrive
+        if session and session.status == "completed":
+            try:
+                processor = SessionProcessor(db)
+                # Check if already processed
+                from sqlalchemy import select
+                from src.models.assessment import ClinicalSignal
+                existing = await db.execute(
+                    select(ClinicalSignal).where(ClinicalSignal.session_id == session.id).limit(1)
+                )
+                if not existing.scalar_one_or_none():
+                    logger.info(f"Starting analysis for session {session.id}")
+                    result = await processor.process_session(session.id)
+                    logger.info(f"Analysis complete: {result.signals_extracted} signals")
+            except Exception as e:
+                logger.error(f"Analysis failed: {e}")
     elif status == "forwarding":
         # Call being forwarded
         pass
@@ -158,9 +201,11 @@ async def handle_status_update(service: SessionService, payload: dict) -> dict:
 
 async def handle_transcript(service: SessionService, payload: dict) -> dict:
     """Handle transcript events - store each transcript segment."""
-    call_data = payload.get("call", {})
+    # Extract from message wrapper (VAPI wraps server-url webhook data)
+    message = payload.get("message", payload)
+    call_data = message.get("call", {})
     call_id = call_data.get("id")
-    transcript_data = payload.get("transcript", {})
+    transcript_data = message.get("transcript", {})
 
     if not call_id or not transcript_data:
         return {"status": "ignored", "reason": "missing data"}
@@ -180,23 +225,67 @@ async def handle_transcript(service: SessionService, payload: dict) -> dict:
     return {"status": "ok"}
 
 
+async def handle_conversation_update(service: SessionService, payload: dict) -> dict:
+    """Handle conversation-update events - extract and store transcripts."""
+    # Extract from message wrapper (VAPI wraps server-url webhook data)
+    message = payload.get("message", payload)
+    call_data = message.get("call", {})
+    call_id = call_data.get("id")
+    conversation = message.get("conversation", [])
+
+    if not call_id:
+        return {"status": "ignored", "reason": "no call id"}
+
+    # Get session to check what we've already stored
+    session = await service.get_session_by_vapi_id(call_id)
+    if not session:
+        return {"status": "ignored", "reason": "session not found"}
+
+    # Get existing transcript count to avoid duplicates
+    existing_transcripts = await service.get_transcripts(session.id)
+    existing_count = len(existing_transcripts)
+
+    # conversation is a list like:
+    # [{"role": "system", "content": "..."}, {"role": "assistant", "content": "..."}, {"role": "user", "content": "..."}]
+    # Skip system messages and only store new ones
+    non_system = [msg for msg in conversation if msg.get("role") != "system"]
+
+    # Only add transcripts that are new (beyond what we've stored)
+    new_messages = non_system[existing_count:]
+
+    for i, msg in enumerate(new_messages):
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        if content:
+            await service.add_transcript(
+                vapi_call_id=call_id,
+                role=role,
+                content=content,
+                timestamp_ms=message.get("timestamp"),
+            )
+
+    return {"status": "ok", "new_messages": len(new_messages)}
+
+
 async def handle_hang(service: SessionService, payload: dict) -> dict:
     """Handle call hang/end events."""
-    call_data = payload.get("call", {})
+    # Extract from message wrapper (VAPI wraps server-url webhook data)
+    message = payload.get("message", payload)
+    call_data = message.get("call", {})
     call_id = call_data.get("id")
 
     if not call_id:
         return {"status": "ignored", "reason": "no call id"}
 
-    timestamp = parse_timestamp(payload.get("timestamp"))
-    ended_reason = payload.get("endedReason", "unknown")
+    timestamp = parse_timestamp(message.get("timestamp"))
+    ended_reason = message.get("endedReason", "unknown")
 
     # Map VAPI ended reasons to our completion reasons
     completion_reason = _map_ended_reason(ended_reason)
 
     await service.mark_session_ended(
         vapi_call_id=call_id,
-        ended_at=timestamp or datetime.utcnow(),
+        ended_at=timestamp or datetime.now(timezone.utc),
         completion_reason=completion_reason,
     )
 
@@ -205,15 +294,18 @@ async def handle_hang(service: SessionService, payload: dict) -> dict:
 
 async def handle_end_of_call_report(service: SessionService, payload: dict, db: AsyncSession) -> dict:
     """Handle end-of-call report with summary and duration, then trigger analysis."""
-    call_data = payload.get("call", {})
+    # Extract from message wrapper (VAPI wraps server-url webhook data)
+    message = payload.get("message", payload)
+    call_data = message.get("call", {})
     call_id = call_data.get("id")
 
     if not call_id:
+        logger.warning("end-of-call-report received without call ID")
         return {"status": "ignored", "reason": "no call id"}
 
     # Extract useful data from the report
     duration_seconds = call_data.get("duration")  # Duration in seconds
-    summary = payload.get("summary", "")
+    summary = message.get("summary", "")
     recording_url = call_data.get("recordingUrl")
 
     # Update session with report data
@@ -224,25 +316,28 @@ async def handle_end_of_call_report(service: SessionService, payload: dict, db: 
         recording_url=recording_url,
     )
 
-    # Trigger post-session analysis pipeline
-    if session:
-        try:
-            processor = SessionProcessor(db)
-            result = await processor.process_session(session.id)
-            logger.info(
-                f"Session {session.id} analysis complete: "
-                f"{result.signals_extracted} signals, {result.domains_scored} domains, "
-                f"{result.processing_time_ms}ms"
-            )
-            return {
-                "status": "ok",
-                "analysis": result.to_dict()
-            }
-        except Exception as e:
-            logger.error(f"Session analysis failed for {session.id}: {e}")
-            return {"status": "ok", "analysis_error": str(e)}
+    if not session:
+        logger.warning(f"end-of-call-report: No session found for call {call_id}")
+        return {"status": "ignored", "reason": "session not found"}
 
-    return {"status": "ok"}
+    # Ensure session is marked as completed (in case hang event hasn't arrived yet)
+    if session.status != "completed":
+        await service.mark_session_ended(
+            vapi_call_id=call_id,
+            ended_at=datetime.now(timezone.utc),
+            completion_reason="completed",
+        )
+        await db.refresh(session)
+
+    # Trigger post-session analysis pipeline
+    try:
+        processor = SessionProcessor(db)
+        result = await processor.process_session(session.id)
+        logger.info(f"Analysis complete: {result.signals_extracted} signals, {result.domains_scored} domains")
+        return {"status": "ok", "analysis": result.to_dict()}
+    except Exception as e:
+        logger.error(f"Analysis failed: {e}")
+        return {"status": "ok", "analysis_error": str(e)}
 
 
 async def handle_function_call(service: SessionService, payload: dict) -> dict:
@@ -254,14 +349,16 @@ async def handle_function_call(service: SessionService, payload: dict) -> dict:
     - flag_concern: Flag something for clinician review
     - end_session: End the session early
     """
-    call_data = payload.get("call", {})
+    # Extract from message wrapper (VAPI wraps server-url webhook data)
+    message = payload.get("message", payload)
+    call_data = message.get("call", {})
     call_id = call_data.get("id")
-    function_call = payload.get("functionCall", {})
+    function_call = message.get("functionCall", {})
 
     function_name = function_call.get("name")
     function_args = function_call.get("parameters", {})
 
-    logger.info(f"Function call: {function_name} with args: {function_args}")
+    logger.debug(f"Function call: {function_name}")
 
     match function_name:
         case "get_patient_context":
@@ -324,7 +421,7 @@ async def vapi_get_context(
     """
     try:
         payload = await request.json()
-        logger.info(f"VAPI get-context request: {payload}")
+        logger.debug("VAPI get-context request")
 
         # Extract from VAPI function call format
         message = payload.get("message", {})
@@ -417,7 +514,7 @@ async def vapi_get_template_variables(
     """
     try:
         payload = await request.json()
-        logger.info(f"VAPI get-template-variables request: {payload}")
+        logger.debug("VAPI get-template-variables request")
 
         # Extract from VAPI function call format
         message = payload.get("message", {})
@@ -491,7 +588,7 @@ async def vapi_flag_concern(
     """
     try:
         payload = await request.json()
-        logger.info(f"VAPI flag-concern request: {payload}")
+        logger.debug("VAPI flag-concern request")
 
         message = payload.get("message", {})
         function_call = message.get("functionCall", {})
@@ -546,7 +643,7 @@ async def vapi_end_session(
     """
     try:
         payload = await request.json()
-        logger.info(f"VAPI end-session request: {payload}")
+        logger.debug("VAPI end-session request")
 
         message = payload.get("message", {})
         function_call = message.get("functionCall", {})
@@ -557,7 +654,7 @@ async def vapi_end_session(
         summary = parameters.get("summary", "")
         call_id = call_data.get("id")
 
-        logger.info(f"Session ending: reason={reason}, call_id={call_id}")
+        logger.debug(f"Session ending: reason={reason}")
 
         # Return signal to VAPI to end the call
         return {
