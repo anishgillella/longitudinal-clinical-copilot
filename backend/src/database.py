@@ -14,7 +14,7 @@ settings = get_settings()
 # Also increase connect timeout for remote database
 engine = create_async_engine(
     settings.get_database_url,
-    echo=settings.debug,
+    echo=False,  # Disable SQL logging to reduce noise
     future=True,
     poolclass=NullPool,  # Required for Supabase's PgBouncer
     connect_args={

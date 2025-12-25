@@ -331,10 +331,13 @@ async def get_session_analysis(
                 "evidence_type": s.evidence_type,
                 "reasoning": s.reasoning,
                 "maps_to_domain": s.maps_to_domain,
+                "dsm5_criteria": s.dsm5_criteria,
                 "intensity": s.intensity,
                 "confidence": s.confidence,
                 "clinical_significance": s.clinical_significance,
                 "clinician_verified": s.clinician_verified,
+                "verbatim_quote": s.verbatim_quote,
+                "quote_context": s.quote_context,
             }
             for s in signals
         ],
@@ -346,8 +349,8 @@ async def get_session_analysis(
                 "normalized_score": d.normalized_score,
                 "confidence": d.confidence,
                 "evidence_count": d.evidence_count,
-                "previous_score": d.previous_score,
-                "score_change": d.score_change,
+                "previous_score": None,  # TODO: Calculate from previous session
+                "score_change": None,  # TODO: Calculate from previous session
             }
             for d in domain_scores
         ],

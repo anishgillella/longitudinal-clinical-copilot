@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Mic,
@@ -163,6 +163,9 @@ export default function VoiceSessionPage() {
   const [isMuted, setIsMuted] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const sessionIdRef = useRef<string | null>(null); // Ref to access sessionId in callbacks
+  const isPollingRef = useRef<boolean>(false); // Track if polling is active
+  const isMountedRef = useRef<boolean>(true); // Track if component is mounted
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [processingProgress, setProcessingProgress] = useState(0);
   const [clinicianNotes, setClinicianNotes] = useState('');
@@ -181,6 +184,15 @@ export default function VoiceSessionPage() {
     notableEvents: '',
     focusArea: 'general',
   });
+
+  // Track component mount/unmount for cleanup
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      isPollingRef.current = false; // Stop any active polling
+    };
+  }, []);
 
   // Fetch patients from API on mount
   useEffect(() => {
@@ -318,46 +330,73 @@ export default function VoiceSessionPage() {
   }, [sessionId]);
 
   const pollForAnalysisResults = async () => {
-    if (!sessionId) {
-      // If no real session ID, use mock data
+    // Use ref to get the current session ID (state may be stale in callbacks)
+    const currentSessionId = sessionIdRef.current;
+
+    if (!currentSessionId) {
+      console.warn('[Analytics] No session ID - using mock data');
       await fetchMockAnalysisResults();
       return;
     }
 
-    const maxAttempts = 30;
+    // Prevent multiple polling loops
+    if (isPollingRef.current) {
+      console.log('[Analytics] Already polling, skipping');
+      return;
+    }
+
+    isPollingRef.current = true;
+    console.log('[Analytics] Starting polling for session:', currentSessionId);
+    const maxAttempts = 60; // Wait up to 2 minutes (60 * 2s)
     let attempts = 0;
 
     const poll = async () => {
+      // Stop polling if component unmounted or polling was cancelled
+      if (!isMountedRef.current || !isPollingRef.current) {
+        console.log('[Analytics] Polling stopped (unmounted or cancelled)');
+        return;
+      }
+
       attempts++;
       try {
-        const response = await fetch(`${API_BASE_URL}/api/v1/sessions/${sessionId}/analysis`, {
-          headers: {
-            'Content-Type': 'application/json',
-            // Add auth header if needed
-          },
-        });
+        const response = await fetch(`${API_BASE_URL}/api/v1/sessions/${currentSessionId}/analysis`);
 
         if (response.ok) {
           const data = await response.json();
-          if (data.processing_status?.status === 'processed') {
-            setProcessingProgress(100);
-            setAnalysisResult(data);
-            setPhase('review');
+          const status = data.processing_status?.status;
+
+          if (status === 'processed') {
+            console.log('[Analytics] Processing complete - signals:', data.signals?.length || 0);
+            isPollingRef.current = false;
+            if (isMountedRef.current) {
+              setProcessingProgress(100);
+              setAnalysisResult(data);
+              setPhase('review');
+            }
             return;
+          } else {
+            // Log progress every 5 attempts
+            if (attempts % 5 === 0) {
+              console.log('[Analytics] Still processing... attempt', attempts, 'status:', status);
+            }
           }
+        } else if (response.status === 404) {
+          console.warn('[Analytics] Session not found');
         }
 
-        if (attempts < maxAttempts) {
+        if (attempts < maxAttempts && isMountedRef.current && isPollingRef.current) {
           setTimeout(poll, 2000);
-        } else {
-          // Fallback to mock data if polling fails
+        } else if (attempts >= maxAttempts) {
+          console.warn('[Analytics] Timeout after', maxAttempts, 'attempts - using mock data');
+          isPollingRef.current = false;
           await fetchMockAnalysisResults();
         }
       } catch (err) {
-        console.error('Error polling for analysis:', err);
+        console.error('[Analytics] Polling error:', err);
         if (attempts >= maxAttempts) {
+          isPollingRef.current = false;
           await fetchMockAnalysisResults();
-        } else {
+        } else if (isMountedRef.current && isPollingRef.current) {
           setTimeout(poll, 2000);
         }
       }
@@ -369,6 +408,10 @@ export default function VoiceSessionPage() {
   const fetchMockAnalysisResults = async () => {
     // Simulate processing delay
     await new Promise(resolve => setTimeout(resolve, 2000));
+
+    // Don't update state if component unmounted
+    if (!isMountedRef.current) return;
+
     setProcessingProgress(100);
 
     const mockAnalysis: AnalysisResult = {
@@ -461,8 +504,10 @@ export default function VoiceSessionPage() {
       ],
     };
 
-    setAnalysisResult(mockAnalysis);
-    setPhase('review');
+    if (isMountedRef.current) {
+      setAnalysisResult(mockAnalysis);
+      setPhase('review');
+    }
   };
 
   const { isCallActive, isSpeaking, volumeLevel, startCall, endCall, toggleMute, callId } =
@@ -485,6 +530,9 @@ export default function VoiceSessionPage() {
     // Determine interview mode based on patient age
     const interviewMode: 'teen' | 'parent' | 'adult' = selectedPatient.age >= 18 ? 'adult' : selectedPatient.age >= 13 ? 'teen' : 'parent';
 
+    // Store session ID locally since setState is async
+    let createdSessionId: string | null = null;
+
     try {
       // Create session in backend
       const response = await fetch(`${API_BASE_URL}/api/v1/sessions`, {
@@ -503,10 +551,15 @@ export default function VoiceSessionPage() {
 
       if (response.ok) {
         const session = await response.json();
+        createdSessionId = session.id;
         setSessionId(session.id);
+        sessionIdRef.current = session.id; // Update ref for callbacks
+        console.log('[Session] Created with ID:', createdSessionId);
+      } else {
+        console.error('[Session] Failed to create:', response.status);
       }
     } catch (err) {
-      console.log('Could not create session in backend, continuing with mock:', err);
+      console.error('[Session] Creation error:', err);
     }
 
     try {
@@ -543,17 +596,14 @@ export default function VoiceSessionPage() {
         use_parent_perspective: interviewMode === 'parent',
       };
 
-      console.log('Starting VAPI call with variables:', vapiVariables);
-
       const vapiCallId = await startCall({
         variables: vapiVariables,
       });
 
-      // Link the VAPI call ID to the session
-      if (sessionId && vapiCallId) {
+      // Link the VAPI call ID to the session (use local variable, not state)
+      if (createdSessionId && vapiCallId) {
         try {
-          console.log('Linking VAPI call ID to session:', { sessionId, vapiCallId });
-          const linkResponse = await fetch(`${API_BASE_URL}/api/v1/sessions/${sessionId}/link/${vapiCallId}`, {
+          const linkResponse = await fetch(`${API_BASE_URL}/api/v1/sessions/${createdSessionId}/link/${vapiCallId}`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -561,16 +611,18 @@ export default function VoiceSessionPage() {
           });
 
           if (linkResponse.ok) {
-            console.log('Successfully linked VAPI call ID to session');
+            console.log('[Session] Linked to VAPI call:', vapiCallId);
           } else {
-            console.error('Failed to link VAPI call ID to session:', linkResponse.status);
+            console.error('[Session] Link failed:', linkResponse.status);
           }
         } catch (linkErr) {
-          console.error('Error linking VAPI call ID to session:', linkErr);
+          console.error('[Session] Link error:', linkErr);
         }
+      } else {
+        console.warn('[Session] Cannot link - missing IDs:', { createdSessionId, vapiCallId });
       }
     } catch (err) {
-      console.error('Failed to start call:', err);
+      console.error('[VAPI] Failed to start call:', err);
       setError('Failed to start voice session. Please check your microphone permissions.');
     } finally {
       setIsLoading(false);
@@ -1208,17 +1260,18 @@ export default function VoiceSessionPage() {
                     explanation: h.explanation,
                   })),
                   dsm5Coverage: analysisResult.signals.reduce((acc, s) => {
-                    const criterion = (s as { dsm5_criteria?: string }).dsm5_criteria;
+                    // Use dsm5_criteria if available, otherwise fall back to maps_to_domain
+                    const criterion = (s as { dsm5_criteria?: string }).dsm5_criteria || s.maps_to_domain;
                     if (criterion) {
                       acc[criterion] = (acc[criterion] || 0) + 1;
                     }
                     return acc;
                   }, {} as Record<string, number>),
                   dsm5Gaps: ['A1', 'A2', 'A3', 'B1', 'B2', 'B3', 'B4'].filter(c => {
-                    const criterion = c;
-                    return !analysisResult.signals.some(s =>
-                      (s as { dsm5_criteria?: string }).dsm5_criteria === criterion
-                    );
+                    return !analysisResult.signals.some(s => {
+                      const criterion = (s as { dsm5_criteria?: string }).dsm5_criteria || s.maps_to_domain;
+                      return criterion === c;
+                    });
                   }),
                   summary: analysisResult.summary?.brief_summary || undefined,
                 }}

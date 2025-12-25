@@ -75,7 +75,7 @@ class Transcript(Base, TimestampMixin):
     # Content
     role: Mapped[str] = mapped_column(String(20), nullable=False)  # assistant, user
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    timestamp_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    timestamp_ms: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
 
     # Speech features (populated during analysis)
     speech_speed: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
