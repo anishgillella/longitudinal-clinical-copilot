@@ -10,8 +10,8 @@
  *  Design is how it works." - Steve Jobs
  */
 
-import React, { useEffect, useState, useMemo } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
+import { motion, AnimatePresence, useSpring, useTransform } from 'framer-motion';
 import {
   Brain,
   Activity,
@@ -115,36 +115,31 @@ const COLORS = {
   },
 };
 
-// Animated number component
+// Animated number component - optimized with Framer Motion spring
+// Uses GPU-accelerated animations instead of setInterval
 const AnimatedNumber: React.FC<{ value: number; suffix?: string; decimals?: number }> = ({
   value,
   suffix = '',
   decimals = 0
 }) => {
-  const [displayValue, setDisplayValue] = useState(0);
+  const springValue = useSpring(0, { stiffness: 100, damping: 30 });
+  const displayValue = useTransform(springValue, (v) => v.toFixed(decimals));
+  const nodeRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
-    const duration = 1000;
-    const steps = 60;
-    const increment = value / steps;
-    let current = 0;
+    springValue.set(value);
+  }, [springValue, value]);
 
-    const timer = setInterval(() => {
-      current += increment;
-      if (current >= value) {
-        setDisplayValue(value);
-        clearInterval(timer);
-      } else {
-        setDisplayValue(current);
+  useEffect(() => {
+    const unsubscribe = displayValue.on('change', (v) => {
+      if (nodeRef.current) {
+        nodeRef.current.textContent = v + suffix;
       }
-    }, duration / steps);
+    });
+    return () => unsubscribe();
+  }, [displayValue, suffix]);
 
-    return () => clearInterval(timer);
-  }, [value]);
-
-  return (
-    <span>{displayValue.toFixed(decimals)}{suffix}</span>
-  );
+  return <span ref={nodeRef}>{value.toFixed(decimals)}{suffix}</span>;
 };
 
 // Circular progress indicator - Apple Watch style
