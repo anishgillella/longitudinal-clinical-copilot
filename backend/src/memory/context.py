@@ -191,6 +191,104 @@ class ContextService:
             "follow_up_items": follow_up_items,
         }
 
+    async def get_vapi_template_variables(
+        self,
+        patient_id: UUID,
+        session_id: UUID,
+        interview_mode: str = "parent",
+    ) -> dict:
+        """
+        Get structured variables for VAPI prompt template injection.
+
+        These variables populate the VAPI prompt template's {{variable}} placeholders.
+
+        Args:
+            patient_id: The patient ID
+            session_id: The session ID
+            interview_mode: Who is being interviewed (parent, teen, adult)
+
+        Returns:
+            Dictionary of template variables for VAPI prompt injection
+        """
+        # Get patient info
+        patient_info = await self._get_patient_info(patient_id)
+        session_history = await self._get_session_history(patient_id)
+
+        # Get clinical gaps (domains needing more evidence)
+        missing_information = await self._get_dsm5_gaps(patient_id)
+
+        # Get focus areas for this session
+        focus_areas = await self._get_exploration_priorities(patient_id)
+
+        # Get previous session summary
+        previous_session_summary = ""
+        if session_history.get("recent_sessions"):
+            recent = session_history["recent_sessions"][0]
+            previous_session_summary = recent.get("summary", "")
+
+        # Determine interviewee booleans
+        interviewee_is_parent = interview_mode == "parent"
+        interviewee_is_teen = interview_mode == "teen"
+        interviewee_is_adult = interview_mode == "adult"
+
+        return {
+            # Core identifiers
+            "session_id": str(session_id),
+            "patient_id": str(patient_id),
+
+            # Interviewee type variables
+            "interviewee_type": interview_mode,
+            "interviewee_is_parent": interviewee_is_parent,
+            "interviewee_is_teen": interviewee_is_teen,
+            "interviewee_is_adult": interviewee_is_adult,
+
+            # Patient information
+            "patient_name": patient_info.get("first_name", "the patient"),
+            "patient_full_name": patient_info.get("name", ""),
+            "patient_age": patient_info.get("age", 0),
+            "patient_gender": patient_info.get("gender", ""),
+            "primary_concern": patient_info.get("primary_concern", ""),
+
+            # Session context
+            "total_sessions": session_history.get("completed_sessions", 0),
+            "is_first_session": session_history.get("completed_sessions", 0) == 0,
+            "previous_session_summary": previous_session_summary,
+
+            # Clinical focus
+            "focus_areas": focus_areas,
+            "focus_areas_text": ", ".join(focus_areas) if focus_areas else "general assessment",
+            "missing_information": missing_information,
+            "missing_domains_text": ", ".join(missing_information) if missing_information else "none identified",
+
+            # Behavioral adaptations
+            "use_concrete_language": interviewee_is_teen,
+            "use_parent_perspective": interviewee_is_parent,
+        }
+
+    async def _get_dsm5_gaps(self, patient_id: UUID) -> list[str]:
+        """
+        Identify DSM-5 domains with insufficient evidence.
+
+        Returns list of domain names that need more exploration.
+        """
+        # Get domain scores
+        scores = await self.scoring_service.get_latest_scores_for_patient(patient_id)
+
+        # Identify domains with low confidence or insufficient signals
+        gaps = []
+        for code, score in scores.items():
+            # Consider it a gap if confidence is below threshold
+            if score.confidence < 0.5:
+                gaps.append(score.domain_name)
+
+        # Also get domains that haven't been scored yet
+        exploration_priorities = await self.scoring_service.get_domains_needing_exploration(patient_id)
+        for domain in exploration_priorities:
+            if domain not in gaps:
+                gaps.append(domain)
+
+        return gaps[:5]  # Return top 5 gaps
+
     # ==========================================================================
     # Private Helper Methods
     # ==========================================================================

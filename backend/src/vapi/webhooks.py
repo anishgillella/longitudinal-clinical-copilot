@@ -330,8 +330,11 @@ async def vapi_get_context(
         message = payload.get("message", {})
         function_call = message.get("functionCall", {})
         parameters = function_call.get("parameters", {})
+        call_data = payload.get("call", {})
 
         patient_id = parameters.get("patient_id")
+        session_id = parameters.get("session_id")
+        call_id = call_data.get("id")
 
         if not patient_id:
             return {
@@ -343,18 +346,42 @@ async def vapi_get_context(
                 ]
             }
 
-        # Get context
+        # Get session to retrieve interview_mode
+        session_service = SessionService(db)
+        session = None
+        interview_mode = "parent"
+
+        if call_id:
+            session = await session_service.get_session_by_vapi_id(call_id)
+            if session:
+                interview_mode = getattr(session, "interview_mode", "parent")
+                session_id = str(session.id)
+
+        # Get structured template variables
         context_service = ContextService(db)
+        template_vars = await context_service.get_vapi_template_variables(
+            patient_id=UUID(patient_id),
+            session_id=UUID(session_id) if session_id else UUID(patient_id),
+            interview_mode=interview_mode,
+        )
+
+        # Also get the text context for backwards compatibility
         context = await context_service.get_patient_context(
             patient_id=UUID(patient_id),
             session_type="checkin",
         )
 
+        # Combine structured variables with context text
+        result = {
+            "context_text": context.context_text,
+            "variables": template_vars,
+        }
+
         return {
             "results": [
                 {
                     "toolCallId": function_call.get("id"),
-                    "result": context.context_text
+                    "result": result
                 }
             ]
         }
@@ -366,6 +393,87 @@ async def vapi_get_context(
                 {
                     "toolCallId": "",
                     "result": f"Error retrieving context: {str(e)}"
+                }
+            ]
+        }
+
+
+@router.post("/functions/get-template-variables")
+async def vapi_get_template_variables(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get structured template variables for VAPI prompt injection.
+
+    Called by VAPI to populate prompt template placeholders like:
+    - {{interviewee_type}}
+    - {{patient_name}}
+    - {{previous_session_summary}}
+    - {{focus_areas_text}}
+    - {{missing_domains_text}}
+
+    Returns all variables needed by the VAPI prompt template.
+    """
+    try:
+        payload = await request.json()
+        logger.info(f"VAPI get-template-variables request: {payload}")
+
+        # Extract from VAPI function call format
+        message = payload.get("message", {})
+        function_call = message.get("functionCall", {})
+        parameters = function_call.get("parameters", {})
+        call_data = payload.get("call", {})
+
+        patient_id = parameters.get("patient_id")
+        session_id = parameters.get("session_id")
+        call_id = call_data.get("id")
+
+        if not patient_id:
+            return {
+                "results": [
+                    {
+                        "toolCallId": function_call.get("id"),
+                        "result": {"error": "No patient ID provided"}
+                    }
+                ]
+            }
+
+        # Get session to retrieve interview_mode
+        session_service = SessionService(db)
+        session = None
+        interview_mode = "parent"
+
+        if call_id:
+            session = await session_service.get_session_by_vapi_id(call_id)
+            if session:
+                interview_mode = getattr(session, "interview_mode", "parent")
+                session_id = str(session.id)
+
+        # Get structured template variables
+        context_service = ContextService(db)
+        template_vars = await context_service.get_vapi_template_variables(
+            patient_id=UUID(patient_id),
+            session_id=UUID(session_id) if session_id else UUID(patient_id),
+            interview_mode=interview_mode,
+        )
+
+        return {
+            "results": [
+                {
+                    "toolCallId": function_call.get("id"),
+                    "result": template_vars
+                }
+            ]
+        }
+
+    except Exception as e:
+        logger.error(f"Error in get-template-variables: {e}")
+        return {
+            "results": [
+                {
+                    "toolCallId": "",
+                    "result": {"error": f"Error retrieving variables: {str(e)}"}
                 }
             ]
         }
@@ -492,6 +600,10 @@ async def get_vapi_config():
             "get_patient_context": {
                 "url": f"{base_url}/api/v1/vapi/functions/get-context",
                 "description": "Retrieve context about the patient from previous sessions"
+            },
+            "get_template_variables": {
+                "url": f"{base_url}/api/v1/vapi/functions/get-template-variables",
+                "description": "Get structured variables for prompt template (interviewee_type, patient_name, focus_areas, etc.)"
             },
             "flag_concern": {
                 "url": f"{base_url}/api/v1/vapi/functions/flag-concern",

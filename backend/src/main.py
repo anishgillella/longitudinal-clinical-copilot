@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -6,15 +7,27 @@ from src.config import get_settings
 from src.database import init_db
 from src.api.router import api_router
 from src.api.health import router as health_router
+from src.vapi.client import sync_vapi_webhook_on_startup
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    logger.info("Starting application...")
     await init_db()
+
+    # Sync VAPI webhook URL automatically
+    # This ensures VAPI sends webhooks to the correct URL (ngrok in dev)
+    logger.info("Syncing VAPI webhook URL...")
+    await sync_vapi_webhook_on_startup()
+
     yield
     # Shutdown
-    pass
+    logger.info("Shutting down application...")
 
 
 settings = get_settings()
