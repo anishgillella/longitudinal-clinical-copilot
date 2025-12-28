@@ -413,6 +413,36 @@ CRITICAL RULES:
 8. Consider developmental context and differential diagnoses
 9. Note what CANNOT be assessed from transcript alone
 
+=== CLINICAL REASONING CHAIN (REQUIRED) ===
+For EACH hypothesis, you MUST provide a step-by-step reasoning chain showing:
+1. Base rate: Starting probability given referral population (~15-20% for ASD in clinical referrals)
+2. Criterion A evidence: Contribution from social communication signals
+3. Criterion B evidence: Contribution from restricted/repetitive behavior signals
+4. Contradicting evidence: Negative contribution from counter-evidence
+5. Evidence quality adjustment: Adjustment based on evidence quality (observed vs inferred)
+6. Final posterior: The resulting evidence strength with confidence interval
+
+This chain provides TRANSPARENCY for clinical decision-making and audit purposes.
+
+=== CONFIDENCE INTERVAL CALCULATION ===
+Calculate 95% confidence intervals based on:
+- Number of supporting signals (more = narrower interval)
+- Evidence quality tiers (higher quality = narrower interval)
+- Consistency across sessions (more consistent = narrower interval)
+- Inter-informant agreement (aligned = narrower interval)
+
+Formula guidance:
+- CI_width = base_uncertainty * (1 / sqrt(n_signals)) * quality_factor
+- Lower bound = max(0, evidence_strength - CI_width)
+- Upper bound = min(1, evidence_strength + CI_width)
+
+=== DSM-5 CRITERIA STATUS (REQUIRED FOR ASD) ===
+You MUST explicitly track:
+- Criterion A: ALL 3 areas must show deficits (A1, A2, A3)
+- Criterion B: At least 2 of 4 areas must show patterns (B1, B2, B3, B4)
+- Functional impairment: Must be documented
+- Developmental period: Must be documented (symptoms present in early development)
+
 ASD LEVELS (if ASD hypothesis is supported):
 - Level 1: "Requiring support" - Noticeable difficulties without support, can function with support. Social communication deficits cause noticeable impairments.
 - Level 2: "Requiring substantial support" - Marked difficulties apparent, limited initiating of social interactions, reduced or abnormal responses.
@@ -444,14 +474,14 @@ Generate a comprehensive hypothesis analysis including:
 
 1. PRIMARY HYPOTHESIS: The most supported by evidence
    - Clear condition name and code
-   - Evidence strength with detailed justification
+   - Evidence strength with REASONING CHAIN showing how you arrived at this number
+   - 95% Confidence interval (lower and upper bounds)
    - All supporting evidence (reference signal IDs)
    - Any contradicting evidence
-   - Detailed explanation of reasoning
-   - What supports and what questions this hypothesis
+   - DSM-5 criteria status (which are met, which need more evidence)
 
 2. ALTERNATIVE HYPOTHESES: Other possibilities to consider
-   - At least 2-3 alternatives
+   - At least 2-3 alternatives with their own reasoning chains
    - Why they should be considered
    - What evidence supports/contradicts them
 
@@ -461,12 +491,11 @@ Generate a comprehensive hypothesis analysis including:
    - What observations would help differentiate
 
 4. EVIDENCE GAPS: What information is missing
-   - Organize by importance (high/medium/low)
-   - Suggest how to gather each piece
+   - Organize by CLINICAL PRIORITY (what would most change the hypothesis)
+   - Suggest specific questions to ask
 
 5. CLINICAL RECOMMENDATIONS: Next steps for the clinician
-   - Specific areas to assess in-person
-   - Additional history to gather
+   - What to ask in the next session
    - Standardized assessments to consider
 
 IMPORTANT: Reference signal_id for EVERY piece of evidence for traceability.
@@ -479,13 +508,84 @@ Return as JSON:
             "condition_name": "Full descriptive name",
             "evidence_strength": 0.0-1.0,
             "uncertainty": 0.0-1.0,
+            "confidence_interval_lower": 0.0-1.0,
+            "confidence_interval_upper": 0.0-1.0,
+            "reasoning_chain": [
+                {{
+                    "step": "base_rate",
+                    "contribution": 0.15,
+                    "running_total": 0.15,
+                    "explanation": "Starting probability for ASD in clinical referral population"
+                }},
+                {{
+                    "step": "criterion_A_evidence",
+                    "contribution": 0.25,
+                    "running_total": 0.40,
+                    "signals_used": ["signal_id_1", "signal_id_2"],
+                    "explanation": "Strong A1 and A3 evidence from 4 high-confidence signals"
+                }},
+                {{
+                    "step": "criterion_B_evidence",
+                    "contribution": 0.18,
+                    "running_total": 0.58,
+                    "signals_used": ["signal_id_3"],
+                    "explanation": "Moderate B2 and B3 evidence"
+                }},
+                {{
+                    "step": "contradicting_evidence",
+                    "contribution": -0.08,
+                    "running_total": 0.50,
+                    "signals_used": [],
+                    "explanation": "Parent reports typical eye contact"
+                }},
+                {{
+                    "step": "evidence_quality_adjustment",
+                    "contribution": -0.05,
+                    "running_total": 0.45,
+                    "explanation": "Most evidence is self-reported rather than observed"
+                }},
+                {{
+                    "step": "final_posterior",
+                    "contribution": 0,
+                    "running_total": 0.45,
+                    "explanation": "Final evidence strength after all adjustments"
+                }}
+            ],
+            "dsm5_criteria_status": {{
+                "criterion_a_met": true|false|null,
+                "criterion_a_details": {{
+                    "A1_status": "met|partial|not_met|not_assessed",
+                    "A1_evidence": "Summary of A1 evidence",
+                    "A2_status": "met|partial|not_met|not_assessed",
+                    "A2_evidence": "Summary of A2 evidence",
+                    "A3_status": "met|partial|not_met|not_assessed",
+                    "A3_evidence": "Summary of A3 evidence"
+                }},
+                "criterion_b_met": true|false|null,
+                "criterion_b_details": {{
+                    "B1_status": "met|partial|not_met|not_assessed",
+                    "B1_evidence": "Summary",
+                    "B2_status": "met|partial|not_met|not_assessed",
+                    "B2_evidence": "Summary",
+                    "B3_status": "met|partial|not_met|not_assessed",
+                    "B3_evidence": "Summary",
+                    "B4_status": "met|partial|not_met|not_assessed",
+                    "B4_evidence": "Summary"
+                }},
+                "functional_impairment_documented": true|false,
+                "functional_impairment_evidence": "Summary of functional impact",
+                "developmental_period_documented": true|false,
+                "developmental_period_evidence": "Evidence symptoms present in early development"
+            }},
             "supporting_evidence": [
                 {{
                     "signal_id": "uuid of the signal",
                     "signal_name": "name of the signal",
                     "evidence_type": "observed|self_reported|inferred",
+                    "evidence_quality_tier": 1-4,
                     "quote": "exact quote from transcript",
                     "dsm5_criterion": "which criterion this supports",
+                    "weight_contribution": 0.0-0.2,
                     "reasoning": "detailed explanation of why this supports the hypothesis"
                 }}
             ],
@@ -493,58 +593,51 @@ Return as JSON:
                 {{
                     "signal_id": "uuid if from a signal, or null",
                     "description": "what contradicts this hypothesis",
+                    "weight_contribution": -0.0 to -0.2,
                     "reasoning": "why this is contradicting or limiting"
                 }}
             ],
-            "dsm5_criteria_met": {{
-                "criterion_A": ["A1_met_reason", "A2_met_reason", "A3_met_reason or null if not met"],
-                "criterion_B": ["B1_met_reason", "B2_met_reason", "B3_met_reason", "B4_met_reason or null"],
-                "criteria_not_assessable": ["criteria that cannot be assessed from transcript"]
-            }},
             "explanation": "Comprehensive explanation of this hypothesis (3-4 sentences minimum)",
-            "key_supporting_factors": ["factor1", "factor2"],
-            "key_limiting_factors": ["factor1", "factor2"],
             "limitations": "What cannot be assessed from transcript alone",
-            "level_rationale": "If ASD, detailed rationale for the level (1/2/3)"
+            "level_rationale": "If ASD, detailed rationale for the level (1/2/3)",
+            "what_would_increase_confidence": ["Specific observation or assessment that would increase confidence"],
+            "what_would_decrease_confidence": ["Specific finding that would decrease confidence"]
         }}
     ],
     "differential_considerations": [
         {{
             "condition": "Condition name",
-            "likelihood": "low|medium|high",
+            "likelihood": 0.0-1.0,
+            "confidence_interval": [0.0, 1.0],
             "reasoning": "Why this should be considered",
-            "supporting_evidence": ["evidence that could support this"],
-            "against_evidence": ["evidence that argues against this"],
-            "distinguishing_features": "What would help differentiate from primary hypothesis",
+            "key_differentiating_features": ["What distinguishes this from primary hypothesis"],
             "assessment_recommendations": ["how to further evaluate this possibility"]
         }}
     ],
     "evidence_gaps": [
         {{
             "area": "Specific area needing information",
-            "dsm5_relevance": "Which criterion this affects",
-            "importance": "high|medium|low",
-            "current_evidence": "What we know so far",
-            "what_is_missing": "Specifically what is not known",
-            "suggested_approach": "How to gather this information",
-            "suggested_questions": ["specific questions to ask"]
+            "dsm5_criterion": "A1|A2|A3|B1|B2|B3|B4|functional|developmental",
+            "priority": "high|medium|low",
+            "impact_if_positive": "How much would evidence here increase confidence",
+            "impact_if_negative": "How much would contrary evidence decrease confidence",
+            "suggested_questions": ["specific questions to ask in next session"],
+            "suggested_observations": ["what clinician should look for in-person"]
         }}
     ],
-    "clinical_recommendations": [
-        {{
-            "recommendation": "Specific recommendation",
-            "rationale": "Why this is recommended",
-            "priority": "high|medium|low"
-        }}
-    ],
+    "next_session_focus": {{
+        "primary_objective": "Most important thing to assess next",
+        "specific_questions": ["3-5 key questions for next session"],
+        "observations_needed": ["What clinician should observe directly"]
+    }},
     "standardized_assessments_to_consider": [
         {{
             "assessment_name": "e.g., ADOS-2, ADI-R, SRS-2",
-            "rationale": "Why this would be helpful"
+            "priority": "high|medium|low",
+            "rationale": "Why this would be helpful at this stage"
         }}
     ],
-    "confidence_statement": "Detailed statement about overall confidence, limitations, and what would increase certainty",
-    "clinical_summary": "2-3 paragraph summary synthesizing all findings for clinical use"
+    "clinical_summary": "2-3 paragraph summary for clinical documentation"
 }}"""
 
 

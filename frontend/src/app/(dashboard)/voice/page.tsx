@@ -12,7 +12,6 @@ import {
   Clock,
   AlertCircle,
   CheckCircle2,
-  XCircle,
   Loader2,
   ChevronRight,
   FileText,
@@ -22,14 +21,16 @@ import {
   Calendar,
   MessageSquare,
   Target,
+  Sparkles,
+  ListChecks,
+  Info,
+  Lightbulb,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Textarea } from '@/components/ui/textarea';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
   DropdownMenu,
@@ -122,6 +123,7 @@ interface PreSessionCheckIn {
 }
 
 type SessionPhase = 'setup' | 'checkin' | 'active' | 'processing' | 'review';
+type ReviewTab = 'analytics' | 'transcript' | 'summary' | 'actions';
 
 // Patient interface for type safety
 interface Patient {
@@ -177,6 +179,9 @@ export default function VoiceSessionPage() {
   // Signal detail modal state
   const [selectedSignal, setSelectedSignal] = useState<Signal | null>(null);
   const [isSignalModalOpen, setIsSignalModalOpen] = useState(false);
+
+  // Review phase tab state
+  const [reviewTab, setReviewTab] = useState<ReviewTab>('analytics');
 
   // Pre-session check-in state
   const [checkIn, setCheckIn] = useState<PreSessionCheckIn>({
@@ -1177,137 +1182,362 @@ export default function VoiceSessionPage() {
             </motion.div>
           )}
 
-          {/* Review Phase - Apple-inspired Clinical Analytics Dashboard */}
+          {/* Review Phase - Premium Post-Session Analytics with Tabs */}
           {phase === 'review' && analysisResult && (
             <motion.div
               key="review"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="flex flex-1 flex-col overflow-auto"
+              className="flex flex-1 flex-col overflow-hidden"
             >
-              {/* Minimal Header */}
-              <div className="mb-6 flex items-center justify-between">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setPhase('setup')}
-                  className="gap-2"
-                >
-                  <ArrowLeft className="h-4 w-4" />
-                  New Session
-                </Button>
-                <div className="flex items-center gap-3">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="gap-2"
-                    onClick={() => {
-                      // Export functionality
-                      const data = JSON.stringify(analysisResult, null, 2);
-                      const blob = new Blob([data], { type: 'application/json' });
-                      const url = URL.createObjectURL(blob);
-                      const a = document.createElement('a');
-                      a.href = url;
-                      a.download = `session-${sessionId}-analysis.json`;
-                      a.click();
-                    }}
-                  >
-                    <FileText className="h-4 w-4" />
-                    Export
-                  </Button>
-                  <Button
-                    onClick={handleSaveAndComplete}
-                    className="gap-2 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 shadow-lg shadow-green-500/25"
-                    disabled={isLoading}
-                  >
-                    {isLoading ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <CheckCircle2 className="h-4 w-4" />
-                    )}
-                    Complete Review
-                  </Button>
+              {/* Premium Header */}
+              <div className="flex-shrink-0 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white px-6 py-4 rounded-t-2xl">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <button
+                      onClick={() => setPhase('setup')}
+                      className="p-2 rounded-lg hover:bg-white/10 transition-colors"
+                    >
+                      <ArrowLeft className="h-5 w-5" />
+                    </button>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <Sparkles className="h-4 w-4 text-amber-400" />
+                        <span className="text-xs font-medium text-amber-400 uppercase tracking-wider">
+                          Session Complete
+                        </span>
+                      </div>
+                      <h1 className="text-xl font-semibold">
+                        {selectedPatient?.name || 'Session'} Analysis
+                      </h1>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <div className="text-right mr-4">
+                      <p className="text-sm text-slate-400">{sessionTypeLabels[sessionType]}</p>
+                      <p className="text-lg font-semibold">{analysisResult.signals.length} signals</p>
+                    </div>
+                    <Button
+                      onClick={handleSaveAndComplete}
+                      className="gap-2 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white border-0"
+                      disabled={isLoading}
+                    >
+                      {isLoading ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <CheckCircle2 className="h-4 w-4" />
+                      )}
+                      Complete Session
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Tab Navigation */}
+                <div className="flex items-center gap-1 mt-4 -mb-4 px-2">
+                  {[
+                    { id: 'analytics' as ReviewTab, label: 'Analytics', icon: BarChart3 },
+                    { id: 'transcript' as ReviewTab, label: 'Transcript', icon: FileText },
+                    { id: 'summary' as ReviewTab, label: 'Summary', icon: Brain },
+                    { id: 'actions' as ReviewTab, label: 'Actions', icon: ListChecks },
+                  ].map((tab) => (
+                    <button
+                      key={tab.id}
+                      onClick={() => setReviewTab(tab.id)}
+                      className={`
+                        flex items-center gap-2 px-4 py-3 rounded-t-xl text-sm font-medium transition-all
+                        ${reviewTab === tab.id
+                          ? 'bg-white text-slate-900'
+                          : 'text-slate-400 hover:text-white hover:bg-white/10'
+                        }
+                      `}
+                    >
+                      <tab.icon className="h-4 w-4" />
+                      {tab.label}
+                    </button>
+                  ))}
                 </div>
               </div>
 
-              {/* Beautiful Analytics Dashboard */}
-              <ClinicalAnalyticsDashboard
-                data={{
-                  signals: analysisResult.signals.map(s => ({
-                    id: s.id,
-                    signal_name: s.signal_name,
-                    signal_type: s.signal_type,
-                    evidence: s.evidence,
-                    reasoning: s.reasoning,
-                    dsm5_criteria: (s as { dsm5_criteria?: string }).dsm5_criteria,
-                    maps_to_domain: s.maps_to_domain,
-                    clinical_significance: s.clinical_significance as 'low' | 'moderate' | 'high',
-                    confidence: s.confidence,
-                    verbatim_quote: (s as { verbatim_quote?: string }).verbatim_quote,
-                  })),
-                  domainScores: analysisResult.domain_scores.map(d => ({
-                    domain_code: d.domain_code,
-                    domain_name: d.domain_name || domainNames[d.domain_code] || d.domain_code,
-                    score: d.normalized_score,
-                    confidence: d.confidence,
-                    evidence_count: d.evidence_count,
-                  })),
-                  hypotheses: analysisResult.hypotheses.map(h => ({
-                    condition_code: h.condition_code,
-                    condition_name: h.condition_name,
-                    evidence_strength: h.evidence_strength,
-                    uncertainty: h.uncertainty,
-                    supporting_count: analysisResult.signals.length, // Approximate
-                    explanation: h.explanation,
-                  })),
-                  dsm5Coverage: analysisResult.signals.reduce((acc, s) => {
-                    // Use dsm5_criteria if available, otherwise fall back to maps_to_domain
-                    const criterion = (s as { dsm5_criteria?: string }).dsm5_criteria || s.maps_to_domain;
-                    if (criterion) {
-                      acc[criterion] = (acc[criterion] || 0) + 1;
-                    }
-                    return acc;
-                  }, {} as Record<string, number>),
-                  dsm5Gaps: ['A1', 'A2', 'A3', 'B1', 'B2', 'B3', 'B4'].filter(c => {
-                    return !analysisResult.signals.some(s => {
-                      const criterion = (s as { dsm5_criteria?: string }).dsm5_criteria || s.maps_to_domain;
-                      return criterion === c;
-                    });
-                  }),
-                  summary: analysisResult.summary?.brief_summary || undefined,
-                }}
-                patientName={selectedPatient?.name || 'Patient'}
-                sessionType={sessionTypeLabels[sessionType]}
-                onSignalClick={(signal) => {
-                  setSelectedSignal(analysisResult.signals.find(s => s.id === signal.id) || null);
-                  setIsSignalModalOpen(true);
-                }}
-              />
+              {/* Tab Content */}
+              <div className="flex-1 overflow-auto bg-white dark:bg-neutral-900 rounded-b-2xl border border-t-0 border-neutral-200 dark:border-neutral-800">
+                <AnimatePresence mode="wait">
+                  {/* Analytics Tab */}
+                  {reviewTab === 'analytics' && (
+                    <motion.div
+                      key="analytics-tab"
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      className="p-6"
+                    >
+                      <ClinicalAnalyticsDashboard
+                        data={{
+                          signals: analysisResult.signals.map((s, idx) => ({
+                            id: s.id || `signal-${idx}`,
+                            signal_name: s.signal_name,
+                            signal_type: s.signal_type,
+                            evidence: s.evidence,
+                            reasoning: s.reasoning,
+                            dsm5_criteria: (s as { dsm5_criteria?: string }).dsm5_criteria,
+                            maps_to_domain: s.maps_to_domain,
+                            clinical_significance: s.clinical_significance as 'low' | 'moderate' | 'high',
+                            confidence: s.confidence,
+                            verbatim_quote: (s as { verbatim_quote?: string }).verbatim_quote,
+                          })),
+                          domainScores: analysisResult.domain_scores.map((d, idx) => ({
+                            domain_code: `${d.domain_code}-${idx}`,
+                            domain_name: d.domain_name || domainNames[d.domain_code] || d.domain_code,
+                            score: d.normalized_score,
+                            confidence: d.confidence,
+                            evidence_count: d.evidence_count,
+                          })),
+                          hypotheses: analysisResult.hypotheses.map((h, idx) => ({
+                            condition_code: `${h.condition_code}-${idx}`,
+                            condition_name: h.condition_name,
+                            evidence_strength: h.evidence_strength,
+                            uncertainty: h.uncertainty,
+                            supporting_count: analysisResult.signals.length,
+                            explanation: h.explanation,
+                          })),
+                          dsm5Coverage: analysisResult.signals.reduce((acc, s) => {
+                            const criterion = (s as { dsm5_criteria?: string }).dsm5_criteria || s.maps_to_domain;
+                            if (criterion) {
+                              acc[criterion] = (acc[criterion] || 0) + 1;
+                            }
+                            return acc;
+                          }, {} as Record<string, number>),
+                          dsm5Gaps: ['A1', 'A2', 'A3', 'B1', 'B2', 'B3', 'B4'].filter(c => {
+                            return !analysisResult.signals.some(s => {
+                              const criterion = (s as { dsm5_criteria?: string }).dsm5_criteria || s.maps_to_domain;
+                              return criterion === c;
+                            });
+                          }),
+                          summary: analysisResult.summary?.brief_summary || undefined,
+                        }}
+                        patientName={selectedPatient?.name || 'Patient'}
+                        sessionType={sessionTypeLabels[sessionType]}
+                        onSignalClick={(signal) => {
+                          const originalSignal = analysisResult.signals.find(s => signal.id.startsWith(s.id));
+                          setSelectedSignal(originalSignal || null);
+                          setIsSignalModalOpen(true);
+                        }}
+                      />
+                    </motion.div>
+                  )}
 
-              {/* Clinician Notes Section */}
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.3 }}
-                className="mt-6 rounded-3xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 p-6"
-              >
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-purple-500 to-pink-500">
-                    <MessageSquare className="h-5 w-5 text-white" />
-                  </div>
-                  <div>
-                    <h3 className="font-semibold text-neutral-900 dark:text-white">Clinician Notes</h3>
-                    <p className="text-sm text-neutral-500">Add your observations and clinical impressions</p>
-                  </div>
-                </div>
-                <Textarea
-                  placeholder="Document your clinical observations, impressions, and any additional context that would be valuable for the patient record..."
-                  value={clinicianNotes}
-                  onChange={(e) => setClinicianNotes(e.target.value)}
-                  className="min-h-[120px] rounded-xl border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800 focus:bg-white dark:focus:bg-neutral-900 transition-colors resize-none"
-                />
-              </motion.div>
+                  {/* Transcript Tab */}
+                  {reviewTab === 'transcript' && (
+                    <motion.div
+                      key="transcript-tab"
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      className="h-full flex flex-col"
+                    >
+                      <div className="p-4 border-b border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800/50">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <h3 className="font-semibold text-neutral-900 dark:text-white">
+                              Session Transcript
+                            </h3>
+                            <p className="text-sm text-neutral-500">
+                              {messages.length} messages · {formatDuration(callDuration)} duration
+                            </p>
+                          </div>
+                          <Badge variant="secondary" className="bg-emerald-100 text-emerald-700">
+                            <CheckCircle2 className="h-3 w-3 mr-1" />
+                            Processed
+                          </Badge>
+                        </div>
+                      </div>
+                      <div className="flex-1 overflow-auto">
+                        {messages.length > 0 ? (
+                          <TranscriptPanel messages={messages} />
+                        ) : (
+                          <div className="flex flex-col items-center justify-center h-full p-8 text-center">
+                            <div className="w-16 h-16 rounded-full bg-neutral-100 dark:bg-neutral-800 flex items-center justify-center mb-4">
+                              <FileText className="h-8 w-8 text-neutral-400" />
+                            </div>
+                            <p className="text-neutral-500">No transcript available</p>
+                            <p className="text-sm text-neutral-400 mt-1">
+                              The session transcript will appear here after a voice session
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    </motion.div>
+                  )}
+
+                  {/* Summary Tab */}
+                  {reviewTab === 'summary' && (
+                    <motion.div
+                      key="summary-tab"
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      className="p-6 space-y-6"
+                    >
+                      {/* Brief Summary */}
+                      <div className="bg-gradient-to-br from-sky-50 to-indigo-50 dark:from-sky-950/30 dark:to-indigo-950/30 rounded-2xl p-6 border border-sky-100 dark:border-sky-900">
+                        <div className="flex items-center gap-2 mb-3">
+                          <Sparkles className="h-5 w-5 text-sky-600" />
+                          <h3 className="font-semibold text-sky-900 dark:text-sky-100">Session Summary</h3>
+                        </div>
+                        <p className="text-neutral-700 dark:text-neutral-300 leading-relaxed">
+                          {analysisResult.summary?.brief_summary || 'No summary available for this session.'}
+                        </p>
+                      </div>
+
+                      {/* Detailed Summary */}
+                      {analysisResult.summary?.detailed_summary && (
+                        <div className="bg-white dark:bg-neutral-800 rounded-2xl p-6 border border-neutral-200 dark:border-neutral-700">
+                          <div className="flex items-center gap-2 mb-3">
+                            <Brain className="h-5 w-5 text-purple-500" />
+                            <h3 className="font-semibold text-neutral-900 dark:text-white">Detailed Analysis</h3>
+                          </div>
+                          <p className="text-neutral-600 dark:text-neutral-400 leading-relaxed">
+                            {analysisResult.summary.detailed_summary}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Key Topics */}
+                      {analysisResult.summary?.key_topics?.topics && analysisResult.summary.key_topics.topics.length > 0 && (
+                        <div className="bg-white dark:bg-neutral-800 rounded-2xl p-6 border border-neutral-200 dark:border-neutral-700">
+                          <div className="flex items-center gap-2 mb-4">
+                            <Target className="h-5 w-5 text-amber-500" />
+                            <h3 className="font-semibold text-neutral-900 dark:text-white">Key Topics Discussed</h3>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            {analysisResult.summary.key_topics.topics.map((topic, i) => (
+                              <span
+                                key={i}
+                                className="px-3 py-1.5 bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-200 rounded-full text-sm font-medium"
+                              >
+                                {topic}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Clinical Observations */}
+                      {analysisResult.summary?.clinical_observations && (
+                        <div className="bg-white dark:bg-neutral-800 rounded-2xl p-6 border border-neutral-200 dark:border-neutral-700">
+                          <div className="flex items-center gap-2 mb-3">
+                            <Info className="h-5 w-5 text-blue-500" />
+                            <h3 className="font-semibold text-neutral-900 dark:text-white">Clinical Observations</h3>
+                          </div>
+                          <p className="text-neutral-600 dark:text-neutral-400 leading-relaxed">
+                            {analysisResult.summary.clinical_observations}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Emotional Tone */}
+                      {analysisResult.summary?.emotional_tone && (
+                        <div className="bg-white dark:bg-neutral-800 rounded-2xl p-6 border border-neutral-200 dark:border-neutral-700">
+                          <div className="flex items-center gap-2 mb-3">
+                            <MessageSquare className="h-5 w-5 text-pink-500" />
+                            <h3 className="font-semibold text-neutral-900 dark:text-white">Emotional Tone</h3>
+                          </div>
+                          <p className="text-neutral-600 dark:text-neutral-400">
+                            {analysisResult.summary.emotional_tone}
+                          </p>
+                        </div>
+                      )}
+                    </motion.div>
+                  )}
+
+                  {/* Actions Tab */}
+                  {reviewTab === 'actions' && (
+                    <motion.div
+                      key="actions-tab"
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      className="p-6 space-y-6"
+                    >
+                      {/* Follow-up Suggestions */}
+                      {analysisResult.summary?.follow_up_suggestions?.suggestions && analysisResult.summary.follow_up_suggestions.suggestions.length > 0 && (
+                        <div className="bg-gradient-to-br from-emerald-50 to-teal-50 dark:from-emerald-950/30 dark:to-teal-950/30 rounded-2xl p-6 border border-emerald-100 dark:border-emerald-900">
+                          <div className="flex items-center gap-2 mb-4">
+                            <Lightbulb className="h-5 w-5 text-emerald-600" />
+                            <h3 className="font-semibold text-emerald-900 dark:text-emerald-100">Follow-up Suggestions</h3>
+                          </div>
+                          <ul className="space-y-3">
+                            {analysisResult.summary.follow_up_suggestions.suggestions.map((suggestion, i) => (
+                              <li
+                                key={i}
+                                className="flex items-start gap-3 text-neutral-700 dark:text-neutral-300"
+                              >
+                                <div className="w-6 h-6 rounded-full bg-emerald-200 dark:bg-emerald-800 flex items-center justify-center flex-shrink-0 mt-0.5">
+                                  <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-200">{i + 1}</span>
+                                </div>
+                                <span>{suggestion}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {/* Concerns */}
+                      {analysisResult.summary?.concerns && analysisResult.summary.concerns.length > 0 && (
+                        <div className="bg-gradient-to-br from-rose-50 to-orange-50 dark:from-rose-950/30 dark:to-orange-950/30 rounded-2xl p-6 border border-rose-100 dark:border-rose-900">
+                          <div className="flex items-center gap-2 mb-4">
+                            <AlertCircle className="h-5 w-5 text-rose-600" />
+                            <h3 className="font-semibold text-rose-900 dark:text-rose-100">Areas of Concern</h3>
+                          </div>
+                          <ul className="space-y-2">
+                            {analysisResult.summary.concerns.map((concern, i) => (
+                              <li
+                                key={i}
+                                className="flex items-start gap-2 text-neutral-700 dark:text-neutral-300"
+                              >
+                                <span className="text-rose-500 mt-1">•</span>
+                                <span>{concern}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {/* Clinician Notes */}
+                      <div className="bg-white dark:bg-neutral-800 rounded-2xl p-6 border border-neutral-200 dark:border-neutral-700">
+                        <div className="flex items-center gap-2 mb-4">
+                          <MessageSquare className="h-5 w-5 text-purple-500" />
+                          <h3 className="font-semibold text-neutral-900 dark:text-white">Your Clinical Notes</h3>
+                        </div>
+                        <Textarea
+                          placeholder="Add your clinical observations, impressions, and notes for this session..."
+                          value={clinicianNotes}
+                          onChange={(e) => setClinicianNotes(e.target.value)}
+                          className="min-h-[150px] rounded-xl border-neutral-200 dark:border-neutral-700 resize-none text-base"
+                        />
+                        <p className="text-xs text-neutral-500 mt-2">
+                          These notes will be saved with the session record
+                        </p>
+                      </div>
+
+                      {/* Quick Actions */}
+                      <div className="grid grid-cols-2 gap-4">
+                        <button className="p-4 rounded-xl border-2 border-dashed border-neutral-200 dark:border-neutral-700 hover:border-sky-300 dark:hover:border-sky-700 hover:bg-sky-50 dark:hover:bg-sky-950/30 transition-all text-left group">
+                          <Calendar className="h-6 w-6 text-neutral-400 group-hover:text-sky-500 mb-2" />
+                          <h4 className="font-medium text-neutral-900 dark:text-white">Schedule Follow-up</h4>
+                          <p className="text-sm text-neutral-500">Book the next session</p>
+                        </button>
+                        <button className="p-4 rounded-xl border-2 border-dashed border-neutral-200 dark:border-neutral-700 hover:border-purple-300 dark:hover:border-purple-700 hover:bg-purple-50 dark:hover:bg-purple-950/30 transition-all text-left group">
+                          <FileText className="h-6 w-6 text-neutral-400 group-hover:text-purple-500 mb-2" />
+                          <h4 className="font-medium text-neutral-900 dark:text-white">Export Report</h4>
+                          <p className="text-sm text-neutral-500">Download session PDF</p>
+                        </button>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
             </motion.div>
           )}
 
@@ -1335,8 +1565,8 @@ export default function VoiceSessionPage() {
         </AnimatePresence>
       </div>
 
-      {/* Transcript Panel - shown during active and review phases */}
-      {(phase === 'active' || phase === 'review') && (
+      {/* Transcript Panel - shown only during active call phase */}
+      {phase === 'active' && (
         <motion.div
           initial={{ opacity: 0, x: 20 }}
           animate={{ opacity: 1, x: 0 }}
@@ -1345,12 +1575,10 @@ export default function VoiceSessionPage() {
           <Card className="flex h-full flex-col border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
             <div className="border-b border-neutral-200 p-4 dark:border-neutral-800">
               <h3 className="font-semibold text-neutral-900 dark:text-white">
-                {phase === 'active' ? 'Live Transcript' : 'Session Transcript'}
+                Live Transcript
               </h3>
               <p className="text-sm text-neutral-500">
-                {phase === 'active'
-                  ? 'Real-time conversation transcript'
-                  : `${messages.length} messages recorded`}
+                Real-time conversation transcript
               </p>
             </div>
 
