@@ -149,6 +149,15 @@ class HypothesisCreate(BaseModel):
     contradicting_evidence: Optional[list[str]] = None
 
 
+class ReasoningStep(BaseModel):
+    """A single step in the clinical reasoning chain."""
+    step: str
+    contribution: float
+    running_total: float
+    signals_used: Optional[list[str]] = None
+    explanation: str
+
+
 class HypothesisResponse(BaseModel):
     id: UUID
     patient_id: UUID
@@ -156,12 +165,34 @@ class HypothesisResponse(BaseModel):
     condition_name: str
     evidence_strength: float
     uncertainty: float
-    confidence_low: float  # evidence_strength - uncertainty
-    confidence_high: float  # evidence_strength + uncertainty
+    # Confidence interval (95% CI)
+    confidence_low: float  # Lower bound
+    confidence_high: float  # Upper bound
+    confidence_interval_lower: float  # Explicit CI lower
+    confidence_interval_upper: float  # Explicit CI upper
+    # Reasoning chain for clinical transparency
+    reasoning_chain: Optional[dict] = None
+    # Evidence quality
+    evidence_quality_score: Optional[float] = None
+    gold_standard_evidence_count: int = 0
+    # DSM-5 criteria status
+    criterion_a_met: Optional[bool] = None
+    criterion_a_count: int = 0
+    criterion_b_met: Optional[bool] = None
+    criterion_b_count: int = 0
+    functional_impairment_documented: Optional[bool] = None
+    developmental_period_documented: Optional[bool] = None
+    # Session tracking
+    last_session_delta: Optional[float] = None
+    sessions_since_stable: int = 0
+    # Differential diagnosis
+    differential_considerations: Optional[list] = None
+    # Core fields
     supporting_signals: int
     contradicting_signals: int
     trend: Optional[str]
     explanation: Optional[str]
+    limitations: Optional[str] = None
     first_indicated_at: Optional[datetime]
     last_updated_at: datetime
 
@@ -170,7 +201,10 @@ class HypothesisResponse(BaseModel):
 
     @classmethod
     def from_orm_with_bounds(cls, obj):
-        """Create response with calculated confidence bounds."""
+        """Create response with calculated confidence bounds and enhanced fields."""
+        ci_lower = getattr(obj, 'confidence_interval_lower', None) or max(0.0, obj.evidence_strength - obj.uncertainty)
+        ci_upper = getattr(obj, 'confidence_interval_upper', None) or min(1.0, obj.evidence_strength + obj.uncertainty)
+
         return cls(
             id=obj.id,
             patient_id=obj.patient_id,
@@ -178,12 +212,27 @@ class HypothesisResponse(BaseModel):
             condition_name=obj.condition_name,
             evidence_strength=obj.evidence_strength,
             uncertainty=obj.uncertainty,
-            confidence_low=max(0.0, obj.evidence_strength - obj.uncertainty),
-            confidence_high=min(1.0, obj.evidence_strength + obj.uncertainty),
+            confidence_low=ci_lower,
+            confidence_high=ci_upper,
+            confidence_interval_lower=ci_lower,
+            confidence_interval_upper=ci_upper,
+            reasoning_chain=getattr(obj, 'reasoning_chain', None),
+            evidence_quality_score=getattr(obj, 'evidence_quality_score', None),
+            gold_standard_evidence_count=getattr(obj, 'gold_standard_evidence_count', 0) or 0,
+            criterion_a_met=getattr(obj, 'criterion_a_met', None),
+            criterion_a_count=getattr(obj, 'criterion_a_count', 0) or 0,
+            criterion_b_met=getattr(obj, 'criterion_b_met', None),
+            criterion_b_count=getattr(obj, 'criterion_b_count', 0) or 0,
+            functional_impairment_documented=getattr(obj, 'functional_impairment_documented', None),
+            developmental_period_documented=getattr(obj, 'developmental_period_documented', None),
+            last_session_delta=getattr(obj, 'last_session_delta', None),
+            sessions_since_stable=getattr(obj, 'sessions_since_stable', 0) or 0,
+            differential_considerations=getattr(obj, 'differential_considerations', None),
             supporting_signals=obj.supporting_signals,
             contradicting_signals=obj.contradicting_signals,
             trend=obj.trend,
             explanation=obj.explanation,
+            limitations=getattr(obj, 'limitations', None),
             first_indicated_at=obj.first_indicated_at,
             last_updated_at=obj.last_updated_at,
         )

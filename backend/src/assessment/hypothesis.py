@@ -116,7 +116,7 @@ class HypothesisEngine:
         session_id: Optional[UUID],
         hypothesis_data: dict,
     ) -> DiagnosticHypothesis:
-        """Create or update a single hypothesis."""
+        """Create or update a single hypothesis with enhanced clinical tracking."""
         condition_code = hypothesis_data.get("condition_code", "unknown")
 
         # Check for existing hypothesis
@@ -131,18 +131,46 @@ class HypothesisEngine:
         new_strength = float(hypothesis_data.get("evidence_strength", 0.0))
         new_uncertainty = float(hypothesis_data.get("uncertainty", 0.5))
 
+        # Extract confidence interval (new)
+        ci_lower = float(hypothesis_data.get("confidence_interval_lower", max(0.0, new_strength - new_uncertainty)))
+        ci_upper = float(hypothesis_data.get("confidence_interval_upper", min(1.0, new_strength + new_uncertainty)))
+
+        # Extract reasoning chain (new)
+        reasoning_chain = hypothesis_data.get("reasoning_chain", [])
+
+        # Extract DSM-5 criteria status (new)
+        dsm5_status = hypothesis_data.get("dsm5_criteria_status", {})
+        criterion_a_met = dsm5_status.get("criterion_a_met")
+        criterion_b_met = dsm5_status.get("criterion_b_met")
+        functional_documented = dsm5_status.get("functional_impairment_documented", False)
+        developmental_documented = dsm5_status.get("developmental_period_documented", False)
+
+        # Count criteria met
+        a_details = dsm5_status.get("criterion_a_details", {})
+        b_details = dsm5_status.get("criterion_b_details", {})
+        criterion_a_count = sum(1 for k in ["A1_status", "A2_status", "A3_status"]
+                                if a_details.get(k) == "met")
+        criterion_b_count = sum(1 for k in ["B1_status", "B2_status", "B3_status", "B4_status"]
+                                if b_details.get(k) == "met")
+
+        # Extract differential considerations (new)
+        differential_considerations = hypothesis_data.get("differential_considerations", [])
+
         if existing:
             # Update existing
             previous_strength = existing.evidence_strength
 
-            # Calculate trend
+            # Calculate trend and delta
             delta = new_strength - previous_strength
             if abs(delta) < 0.05:
                 trend = "stable"
+                sessions_since_stable = existing.sessions_since_stable + 1
             elif delta > 0:
                 trend = "increasing"
+                sessions_since_stable = 0
             else:
                 trend = "decreasing"
+                sessions_since_stable = 0
 
             # Record history
             history = HypothesisHistory(
@@ -154,16 +182,28 @@ class HypothesisEngine:
             )
             self.db.add(history)
 
-            # Update hypothesis
+            # Update hypothesis with all new fields
             existing.evidence_strength = new_strength
             existing.uncertainty = new_uncertainty
+            existing.confidence_interval_lower = ci_lower
+            existing.confidence_interval_upper = ci_upper
+            existing.reasoning_chain = {"steps": reasoning_chain}
             existing.trend = trend
+            existing.last_session_delta = delta
+            existing.sessions_since_stable = sessions_since_stable
             existing.explanation = hypothesis_data.get("explanation")
             existing.supporting_evidence = {"points": hypothesis_data.get("supporting_evidence", [])}
             existing.contradicting_evidence = {"points": hypothesis_data.get("contradicting_evidence", [])}
             existing.supporting_signals = len(hypothesis_data.get("supporting_evidence", []))
             existing.contradicting_signals = len(hypothesis_data.get("contradicting_evidence", []))
             existing.limitations = hypothesis_data.get("limitations")
+            existing.criterion_a_met = criterion_a_met
+            existing.criterion_a_count = criterion_a_count
+            existing.criterion_b_met = criterion_b_met
+            existing.criterion_b_count = criterion_b_count
+            existing.functional_impairment_documented = functional_documented
+            existing.developmental_period_documented = developmental_documented
+            existing.differential_considerations = differential_considerations
             existing.model_version = self.llm.model
 
             return existing
@@ -175,14 +215,26 @@ class HypothesisEngine:
                 condition_name=hypothesis_data.get("condition_name", condition_code),
                 evidence_strength=new_strength,
                 uncertainty=new_uncertainty,
+                confidence_interval_lower=ci_lower,
+                confidence_interval_upper=ci_upper,
+                reasoning_chain={"steps": reasoning_chain},
                 supporting_signals=len(hypothesis_data.get("supporting_evidence", [])),
                 contradicting_signals=len(hypothesis_data.get("contradicting_evidence", [])),
                 first_indicated_at=datetime.utcnow(),
                 trend="stable",
+                last_session_delta=None,
+                sessions_since_stable=0,
                 explanation=hypothesis_data.get("explanation"),
                 supporting_evidence={"points": hypothesis_data.get("supporting_evidence", [])},
                 contradicting_evidence={"points": hypothesis_data.get("contradicting_evidence", [])},
                 limitations=hypothesis_data.get("limitations"),
+                criterion_a_met=criterion_a_met,
+                criterion_a_count=criterion_a_count,
+                criterion_b_met=criterion_b_met,
+                criterion_b_count=criterion_b_count,
+                functional_impairment_documented=functional_documented,
+                developmental_period_documented=developmental_documented,
+                differential_considerations=differential_considerations,
                 model_version=self.llm.model,
             )
             self.db.add(hypothesis)

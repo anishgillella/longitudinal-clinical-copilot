@@ -60,6 +60,58 @@ export interface Transcript {
   created_at: string;
 }
 
+// Reasoning chain step for clinical transparency
+export interface ReasoningStep {
+  step: string;
+  contribution: number;
+  running_total: number;
+  signals_used?: string[];
+  explanation: string;
+}
+
+// DSM-5 criterion status
+export interface CriterionDetail {
+  status: 'met' | 'partial' | 'not_met' | 'not_assessed';
+  evidence: string;
+}
+
+export interface DSM5CriteriaStatus {
+  criterion_a_met: boolean | null;
+  criterion_a_details: {
+    A1_status: string;
+    A1_evidence: string;
+    A2_status: string;
+    A2_evidence: string;
+    A3_status: string;
+    A3_evidence: string;
+  };
+  criterion_b_met: boolean | null;
+  criterion_b_details: {
+    B1_status: string;
+    B1_evidence: string;
+    B2_status: string;
+    B2_evidence: string;
+    B3_status: string;
+    B3_evidence: string;
+    B4_status: string;
+    B4_evidence: string;
+  };
+  functional_impairment_documented: boolean;
+  functional_impairment_evidence: string;
+  developmental_period_documented: boolean;
+  developmental_period_evidence: string;
+}
+
+// Differential diagnosis consideration
+export interface DifferentialConsideration {
+  condition: string;
+  likelihood: number;
+  confidence_interval: [number, number];
+  reasoning: string;
+  key_differentiating_features: string[];
+  assessment_recommendations: string[];
+}
+
 export interface DiagnosticHypothesis {
   id: string;
   patient_id: string;
@@ -67,12 +119,44 @@ export interface DiagnosticHypothesis {
   condition_name: string;
   evidence_strength: number;
   uncertainty: number;
+  // NEW: Confidence interval (95% CI)
+  confidence_interval_lower: number;
+  confidence_interval_upper: number;
+  // NEW: Reasoning chain for clinical transparency
+  reasoning_chain?: { steps: ReasoningStep[] };
+  // NEW: Evidence quality metrics
+  evidence_quality_score?: number;
+  gold_standard_evidence_count?: number;
+  // NEW: DSM-5 criteria tracking
+  criterion_a_met?: boolean | null;
+  criterion_a_count?: number;
+  criterion_b_met?: boolean | null;
+  criterion_b_count?: number;
+  functional_impairment_documented?: boolean;
+  developmental_period_documented?: boolean;
+  // NEW: Session delta tracking
+  last_session_delta?: number;
+  sessions_since_stable?: number;
+  // NEW: Differential diagnosis
+  differential_considerations?: DifferentialConsideration[];
   supporting_signals: number;
   contradicting_signals: number;
   trend?: 'increasing' | 'stable' | 'decreasing';
   explanation?: string;
+  limitations?: string;
   created_at: string;
   updated_at: string;
+}
+
+// Hypothesis history for trajectory visualization
+export interface HypothesisHistoryEntry {
+  date: string;
+  evidence_strength: number;
+  uncertainty: number;
+  confidence_interval_lower: number;
+  confidence_interval_upper: number;
+  delta?: number;
+  session_id?: string;
 }
 
 export interface AssessmentProgress {

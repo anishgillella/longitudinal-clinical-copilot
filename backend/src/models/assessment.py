@@ -24,6 +24,12 @@ class ClinicalSignal(Base, TimestampMixin):
 
     Signals are observations that may be relevant to assessment,
     extracted by the LLM from session transcripts.
+
+    Evidence Quality Tiers (per clinical research standards):
+    - Tier 1 (Gold): Standardized assessment results (ADOS-2, ADI-R, SRS-2)
+    - Tier 2 (High): Direct clinician observation during session
+    - Tier 3 (Moderate): Structured interview responses
+    - Tier 4 (Low): Unstructured self-report
     """
 
     __tablename__ = "clinical_signals"
@@ -38,7 +44,7 @@ class ClinicalSignal(Base, TimestampMixin):
 
     # Signal identification
     signal_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    # Types: communication, social, sensory, behavioral, emotional
+    # Types: communication, social, sensory, behavioral, emotional, restricted_interests
     signal_name: Mapped[str] = mapped_column(String(100), nullable=False)
 
     # Evidence - now with type classification
@@ -70,6 +76,32 @@ class ClinicalSignal(Base, TimestampMixin):
     # Exact patient words when available
     quote_context: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # Surrounding context for the quote
+
+    # === NEW: Evidence Quality & Consistency Tracking ===
+    # Evidence quality tier (1-4, per clinical research standards)
+    evidence_quality_tier: Mapped[int] = mapped_column(Integer, default=3)
+    # 1=Gold (standardized), 2=High (clinician observed), 3=Moderate (structured), 4=Low (unstructured)
+
+    # Cross-session consistency tracking
+    consistency_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # 0-1: How often this pattern appears across sessions (null if first occurrence)
+    occurrence_count: Mapped[int] = mapped_column(Integer, default=1)
+    # Number of sessions where similar signal was observed
+
+    # Informant tracking (critical for pediatric assessments)
+    informant_source: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # parent, patient, teacher, clinician, collateral
+    informant_agreement: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # aligned, discrepant, single_source (when multiple informants report on same domain)
+
+    # Temporal pattern (important for differential diagnosis)
+    temporal_pattern: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    # consistent (always present), episodic (comes and goes), situational (context-specific)
+
+    # Functional impact (required for DSM-5 diagnosis)
+    functional_impact_description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    functional_impact_severity: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # none, mild, moderate, severe (maps to ASD support levels)
 
     # Clinician verification
     clinician_verified: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
@@ -169,6 +201,9 @@ class DiagnosticHypothesis(Base, TimestampMixin):
 
     This is NOT a diagnosis. It represents the current evidence-based
     hypothesis that can change as more data is collected.
+
+    Follows Bayesian reasoning principles with explicit prior/posterior tracking.
+    Confidence intervals follow clinical research standards (typically 95% CI).
     """
 
     __tablename__ = "diagnostic_hypotheses"
@@ -183,11 +218,36 @@ class DiagnosticHypothesis(Base, TimestampMixin):
     # Codes: asd_level_1, asd_level_2, asd_level_3, no_asd, insufficient_data
     condition_name: Mapped[str] = mapped_column(String(255), nullable=False)
 
-    # Evidence
+    # Evidence - point estimate and uncertainty
     evidence_strength: Mapped[float] = mapped_column(Float, nullable=False)
     uncertainty: Mapped[float] = mapped_column(Float, nullable=False)
     supporting_signals: Mapped[int] = mapped_column(Integer, default=0)
     contradicting_signals: Mapped[int] = mapped_column(Integer, default=0)
+
+    # === NEW: Confidence Interval (95% CI per clinical standards) ===
+    confidence_interval_lower: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    confidence_interval_upper: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    interval_method: Mapped[str] = mapped_column(String(30), default="evidence_weighted")
+    # Methods: evidence_weighted, bayesian_posterior, bootstrap
+
+    # === NEW: Reasoning Chain (audit trail for clinical transparency) ===
+    reasoning_chain: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    # Structure: [{"step": "base_rate", "value": 0.15, "explanation": "..."}, ...]
+    # Captures the step-by-step reasoning that led to this conclusion
+
+    # === NEW: Evidence Quality Summary ===
+    evidence_quality_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # 0-1: Weighted average of evidence quality tiers (1=all gold, 0=all low quality)
+    gold_standard_evidence_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Count of Tier 1 (standardized assessment) evidence
+
+    # === NEW: DSM-5 Criteria Status (required for diagnosis) ===
+    criterion_a_met: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    criterion_a_count: Mapped[int] = mapped_column(Integer, default=0)  # Need 3/3 for ASD
+    criterion_b_met: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    criterion_b_count: Mapped[int] = mapped_column(Integer, default=0)  # Need 2/4 for ASD
+    functional_impairment_documented: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    developmental_period_documented: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
 
     # Temporal tracking
     first_indicated_at: Mapped[datetime] = mapped_column(
@@ -199,12 +259,24 @@ class DiagnosticHypothesis(Base, TimestampMixin):
     trend: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     # Trend: increasing, stable, decreasing
 
+    # === NEW: Session delta tracking ===
+    last_session_delta: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # How much the evidence_strength changed from the last session
+    sessions_since_stable: Mapped[int] = mapped_column(Integer, default=0)
+    # Number of sessions where change < 0.05 (hypothesis stabilizing)
+
     # Explanation
     explanation: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     supporting_evidence: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     contradicting_evidence: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     limitations: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # What cannot be assessed from transcript alone
+
+    # === NEW: Differential diagnosis context ===
+    differential_considerations: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    # Structure: [{"condition": "Social Anxiety", "likelihood": 0.35, "distinguishing_features": [...]}]
+    rule_outs_addressed: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    # Conditions that have been explicitly ruled out with reasoning
 
     # Metadata
     model_version: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
